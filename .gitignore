@@ -8,6 +8,10 @@ vendor/chipmunk/mkmf.log
 vendor/chipmunk/*.o
 vendor/chipmunk/*.so
 vendor/chipmunk/lib/*.so
+vendor/chipmunk/*.bundle
+vendor/chipmunk/lib/*.bundle
+vendor/chipmunk/*.dSYM/
+.DS_Store
 
 # Bundler / local config
 .bundle/

@@ -32,7 +32,10 @@ The codebase was last touched against Ruby 2.1 (`.versions.conf` still says `rub
 - `bin/gl_tail` had `trap('KILL')` (illegal — SIGKILL is untrappable) and a `require <relative path>` (broken since Ruby 1.9 but somehow tolerated). Both fixed.
 - `vendor/chipmunk/lib/chipmunk.rb` previously referenced the long-removed `Config::CONFIG` constant; it now uses `RbConfig::CONFIG`.
 
-System libraries required: GL, GLU, freeglut, plus a working display (X or XWayland). SSH key auth or in-config passwords are needed for remote sources.
+- **macOS** builds against Apple's OpenGL/GLUT frameworks with Apple clang. `bin/setup` probes which `-Wno-error=` flags the compiler accepts (clang needs `incompatible-function-pointer-types`, which GCC rejects), installs the chipmunk extension under its platform `DLEXT` (`chipmunk.bundle` on macOS), and refuses Apple's system Ruby. `Engine#start` passes `-useWorkingDir` to `glutInit` on Darwin because Apple GLUT otherwise chdirs to the executable's directory.
+- chipmunk is compiled with `-ffast-math -fno-finite-math-only`: modern clang assumes no infinities under plain `-ffast-math`, but static bodies use infinite mass.
+
+System libraries required: GL, GLU, freeglut, plus a working display (X or XWayland) on Linux; on macOS just the Xcode Command Line Tools. SSH key auth or in-config passwords are needed for remote sources.
 
 ## Architecture
 

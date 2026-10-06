@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
 # One-shot modernization setup. Run after cloning, or whenever the vendored
-# chipmunk source changes. Safe to re-run.
+# chipmunk source changes. Safe to re-run. Works on Linux (GCC or clang) and
+# macOS (Apple clang).
 #
 # Why this exists:
-#   - GCC 14+ promotes several historical warnings (incompatible-pointer-types,
-#     int-conversion, implicit-function-declaration) to errors. Most of the
-#     C-extension gems gltail depends on were written before that.
+#   - GCC 14+ and clang 16+ (incl. Apple clang from Xcode 15 onwards) promote
+#     several historical warnings (incompatible-pointer-types, int-conversion,
+#     implicit-function-declaration, incompatible-function-pointer-types, ...)
+#     to errors. Most of the C-extension gems gltail depends on were written
+#     before that. GCC and clang name some of these diagnostics differently,
+#     and each rejects the other's -Wno-error=<name>, so the flags are probed
+#     against the compiler Ruby actually uses.
 #   - Bundler does not auto-build C extensions for `path:` gems, so the
 #     vendored chipmunk under vendor/chipmunk/ needs an explicit make.
 set -euo pipefail
@@ -13,7 +18,48 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 
-CFLAGS_RELAX="-Wno-error=incompatible-pointer-types -Wno-error=int-conversion -Wno-error=implicit-function-declaration"
+ruby_check="$(ruby -e 'print Gem::Version.new(RUBY_VERSION) >= Gem::Version.new("3.2") ? "ok" : RUBY_VERSION' 2>/dev/null || echo missing)"
+if [ "$ruby_check" != "ok" ]; then
+  echo "glTail needs Ruby 3.2 or newer (found: ${ruby_check})." >&2
+  if [ "$(uname -s)" = "Darwin" ]; then
+    echo "On macOS, install it with Homebrew: brew install ruby" >&2
+    echo "then put \$(brew --prefix ruby)/bin first in your PATH." >&2
+  fi
+  exit 1
+fi
+
+if [ "$(uname -s)" = "Darwin" ]; then
+  if [ "$(command -v ruby)" = "/usr/bin/ruby" ]; then
+    echo "Refusing to use Apple's system Ruby (/usr/bin/ruby)." >&2
+    echo "Install Ruby with Homebrew (brew install ruby) or rbenv/asdf/mise and put it first in your PATH." >&2
+    exit 1
+  fi
+  if ! xcode-select -p >/dev/null 2>&1; then
+    echo "The Xcode Command Line Tools are required: xcode-select --install" >&2
+    exit 1
+  fi
+  SDK="$(xcrun --show-sdk-path 2>/dev/null || true)"
+  for fw in OpenGL GLUT; do
+    if [ -n "$SDK" ] && [ ! -d "$SDK/System/Library/Frameworks/${fw}.framework" ]; then
+      echo "Warning: ${fw}.framework is missing from the macOS SDK at $SDK." >&2
+      echo "         glTail renders through Apple's (deprecated) OpenGL/GLUT; the build will likely fail." >&2
+    fi
+  done
+fi
+
+CC_BIN="$(ruby -rrbconfig -e 'print RbConfig::CONFIG["CC"]')"
+
+# Keep only the -Wno-error=... flags this compiler understands.
+CFLAGS_RELAX=""
+for diag in incompatible-pointer-types int-conversion implicit-function-declaration \
+            incompatible-function-pointer-types implicit-int; do
+  flag="-Wno-error=${diag}"
+  if echo 'int x;' | $CC_BIN $flag -Werror -x c -c -o /dev/null - >/dev/null 2>&1; then
+    CFLAGS_RELAX="${CFLAGS_RELAX:+$CFLAGS_RELAX }${flag}"
+  fi
+done
+echo "Compiler: ${CC_BIN}"
+echo "Relaxed diagnostics: ${CFLAGS_RELAX:-<none>}"
 
 # Wire the relaxed CFLAGS into bundler so opengl, glu, glut all build.
 # These end up in .bundle/config as project-local settings.
@@ -24,13 +70,17 @@ bundle config set --local build.glut   "--with-cflags=${CFLAGS_RELAX}"
 bundle install
 
 # Now build the vendored chipmunk extension into vendor/chipmunk/lib/.
+# Ruby extensions are chipmunk.so on Linux and chipmunk.bundle on macOS.
+DLEXT="$(ruby -rrbconfig -e 'print RbConfig::CONFIG["DLEXT"]')"
 export CFLAGS="${CFLAGS:-} ${CFLAGS_RELAX}"
 cd "$ROOT/vendor/chipmunk"
-rm -f Makefile mkmf.log *.o *.so lib/chipmunk.so
+rm -f Makefile mkmf.log *.o *.so *.bundle lib/chipmunk.so lib/chipmunk.bundle
+rm -rf *.dSYM
 ruby ext/chipmunk/extconf.rb
 make
-mv chipmunk.so lib/chipmunk.so
+mv "chipmunk.${DLEXT}" "lib/chipmunk.${DLEXT}"
 rm -f Makefile mkmf.log *.o
+rm -rf *.dSYM
 
 echo
 echo "Setup complete. Run with:"

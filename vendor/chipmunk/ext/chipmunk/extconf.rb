@@ -52,6 +52,9 @@ if enable_config("64", false)
   $CFLAGS += ' -m64'
 end
 
-$CFLAGS += ' -std=gnu99 -ffast-math -DNDEBUG '
+# -ffast-math implies -ffinite-math-only, which lets modern compilers (clang
+# 18+, Apple clang included) assume INFINITY never occurs. Chipmunk uses
+# infinite mass/moment for static bodies, so keep infinities well-defined.
+$CFLAGS += ' -std=gnu99 -ffast-math -fno-finite-math-only -DNDEBUG '
 create_makefile('chipmunk')
 
