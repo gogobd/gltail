@@ -1,8 +1,8 @@
 From 486119c34a147dcf41d8af3615821052ad2b13f0 Mon Sep 17 00:00:00 2001
 From: gogo <gogo@bluedynamics.com>
 Date: Tue, 6 Oct 2026 10:20:46 +0200
-Subject: [PATCH] Add --stdin to read piped log lines; fix SSH partial-line
- handling
+Subject: [PATCH 06/11] Add --stdin to read piped log lines; fix SSH
+ partial-line handling
 
 - New Source::Stdin (source: stdin) reads stdin non-blockingly on the
   render timer, so any command can be piped in, logstalgia-style:

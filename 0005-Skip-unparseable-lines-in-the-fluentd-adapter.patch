@@ -1,7 +1,7 @@
 From 586b6aa9ca260e85cf967b753382c2604ef7ab79 Mon Sep 17 00:00:00 2001
 From: gogo <gogo@bluedynamics.com>
 Date: Tue, 6 Oct 2026 10:14:27 +0200
-Subject: [PATCH] Skip unparseable lines in the fluentd adapter
+Subject: [PATCH 05/11] Skip unparseable lines in the fluentd adapter
 
 Fluentd parsers yield (nil, nil) for lines they cannot parse; the
 adapter passed nil to the mapper, which crashed with NoMethodError.

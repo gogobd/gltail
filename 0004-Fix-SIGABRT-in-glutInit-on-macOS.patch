@@ -1,7 +1,7 @@
 From d31d24b207062b53f35b05dcc5e361a14e9edf2f Mon Sep 17 00:00:00 2001
 From: gogo <gogo@bluedynamics.com>
 Date: Tue, 6 Oct 2026 10:09:25 +0200
-Subject: [PATCH] Fix SIGABRT in glutInit on macOS
+Subject: [PATCH 04/11] Fix SIGABRT in glutInit on macOS
 
 Apple GLUT removes consumed options (-useWorkingDir) by shifting argv
 up to its NULL terminator; the glut gem's argv is not NULL-terminated,

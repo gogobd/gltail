@@ -1,0 +1,30 @@
+From f86019b7759b2c88eb043b52b54a817c72a1c7aa Mon Sep 17 00:00:00 2001
+From: gogo <gogo@bluedynamics.com>
+Date: Tue, 6 Oct 2026 15:31:27 +0200
+Subject: [PATCH 10/11] Report unknown command-line options instead of treating
+ them as config files
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013kYwHzrj5ef427USqzf3UF
+---
+ bin/gl_tail | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/bin/gl_tail b/bin/gl_tail
+index 9cfb315..018e36e 100755
+--- a/bin/gl_tail
++++ b/bin/gl_tail
+@@ -72,6 +72,10 @@ ARGV.each do |arg|
+   when '--options', '-o'
+     @print = :options
+   else
++    if arg.start_with?('-') && !File.exist?(arg)
++      abort "Unknown option: #{arg} (see gl_tail --help)"
++    end
++
+     file_given = true
+     if(File.exist?(arg) && File.file?(arg))
+       file = arg
+-- 
+2.43.0
+

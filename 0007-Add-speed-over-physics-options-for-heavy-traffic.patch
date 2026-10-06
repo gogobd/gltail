@@ -1,7 +1,7 @@
 From 460c48eaaa991159334482d97a063e4c5193f8d0 Mon Sep 17 00:00:00 2001
 From: gogo <gogo@bluedynamics.com>
 Date: Tue, 6 Oct 2026 11:43:10 +0200
-Subject: [PATCH] Add speed-over-physics options for heavy traffic
+Subject: [PATCH 07/11] Add speed-over-physics options for heavy traffic
 
 - blob_collisions: false (config) puts all blobs in one chipmunk group
   so they don't collide with each other; while bouncing is off they get

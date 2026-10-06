@@ -87,3 +87,21 @@ Installation instructions (Windows):
   shipped with your version of Windows do not include this, and it can be installed by
   getting the latest drivers from your graphics card vendor)
 
+Applying the patches to the original glTail:
+  Starting from a fresh clone of https://github.com/Fudge/gltail, with the
+  eleven .patch files in a folder next to it called gltail-patches:
+
+    git clone https://github.com/Fudge/gltail.git
+    cd gltail
+    git am ../gltail-patches/0001-Make-glTail-build-and-run-on-macOS.patch
+    git am ../gltail-patches/0002-Docs-run-bin-setup-alone-bundle-install-first-fails-.patch
+    git am ../gltail-patches/0003-Fix-glut-build-on-macOS-pass-all-build-flags-through.patch
+    git am ../gltail-patches/0004-Fix-SIGABRT-in-glutInit-on-macOS.patch
+    git am ../gltail-patches/0005-Skip-unparseable-lines-in-the-fluentd-adapter.patch
+    git am ../gltail-patches/0006-Add-stdin-to-read-piped-log-lines-fix-SSH-partial-li.patch
+    git am ../gltail-patches/0007-Add-speed-over-physics-options-for-heavy-traffic.patch
+    git am ../gltail-patches/0008-Add-physics_rate-step-physics-every-Nth-frame-or-ada.patch
+    git am ../gltail-patches/0009-Add-per-second-rate_unit-second-to-show-rates-as-r-s.patch
+    git am ../gltail-patches/0010-Report-unknown-command-line-options-instead-of-treat.patch
+    git am ../gltail-patches/0011-README-explain-how-to-apply-.patch-files-with-git-am.patch
+    bin/setup

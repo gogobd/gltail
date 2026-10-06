@@ -1,50 +1,7 @@
-From 912c1772c1edc9e5e941bcf63f6007258e94abd8 Mon Sep 17 00:00:00 2001
-From: gogo <gogo@bluedynamics.com>
-Date: Tue, 6 Oct 2026 09:56:20 +0200
-Subject: [PATCH 1/2] Docs: run bin/setup alone; bundle install first fails on
- clang
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_013kYwHzrj5ef427USqzf3UF
----
- CLAUDE.md | 2 +-
- README    | 2 +-
- 2 files changed, 2 insertions(+), 2 deletions(-)
-
-diff --git a/CLAUDE.md b/CLAUDE.md
-index 8b236e9..88cfcbf 100644
---- a/CLAUDE.md
-+++ b/CLAUDE.md
-@@ -8,7 +8,7 @@ glTail is a Ruby program that tails log files (typically over SSH from remote se
- 
- ## Commands
- 
--- First-time setup: `bundle install && bin/setup` — `bin/setup` builds the vendored chipmunk C extension; bundler does *not* auto-build extensions for `path:` gems, so this step is mandatory and must be re-run if the chipmunk source changes.
-+- First-time setup: `bin/setup` (it runs `bundle install` itself; running `bundle install` first fails because the per-compiler build flags are not configured yet) — it also builds the vendored chipmunk C extension; bundler does *not* auto-build extensions for `path:` gems, so this step is mandatory and must be re-run if the chipmunk source changes.
- - Run: `bundle exec ruby bin/gl_tail <configfile>` (defaults to `gl_tail.yaml` in the cwd; always run via `bundle exec` so the vendored chipmunk and the right opengl/glu/glut are loaded).
- - Generate a starter config: `bin/gl_tail --new myconfig.yaml` (copies `dist/config.yaml`).
- - List built-in parsers: `bin/gl_tail <any-config> --parsers`.
-diff --git a/README b/README
-index 7ff69ad..364ab66 100644
---- a/README
-+++ b/README
-@@ -43,7 +43,7 @@ Installation instructions (macOS, Apple Silicon or Intel):
-   brew install ruby               # Ruby 3.2+; Apple's /usr/bin/ruby is too old
-   export PATH="$(brew --prefix ruby)/bin:$PATH"
-   gem install bundler
--  bundle install && bin/setup     # bin/setup builds the vendored chipmunk extension
-+  bin/setup                       # configures build flags, runs bundle install, builds chipmunk
-   bundle exec ruby bin/gl_tail --new my.yaml
-   bundle exec ruby bin/gl_tail my.yaml
- 
--- 
-2.43.0
-
-
 From 29610756c800a955ab4e9ff5ea869f39be8dd94b Mon Sep 17 00:00:00 2001
 From: gogo <gogo@bluedynamics.com>
 Date: Tue, 6 Oct 2026 10:00:15 +0200
-Subject: [PATCH 2/2] Fix glut build on macOS; pass all build flags through
+Subject: [PATCH 03/11] Fix glut build on macOS; pass all build flags through
  Bundler
 
 - Bundler shell-splits build.<gem> settings, so only the first
