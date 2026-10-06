@@ -1,0 +1,215 @@
+From eaa3d5862a6828e7142fabe17d88b78f9e2a8180 Mon Sep 17 00:00:00 2001
+From: gogo <gogo@bluedynamics.com>
+Date: Tue, 6 Oct 2026 09:38:40 +0200
+Subject: [PATCH] Make glTail build and run on macOS
+
+- bin/setup: probe -Wno-error flags against Ruby's compiler (Apple clang
+  needs incompatible-function-pointer-types, which GCC rejects); install
+  chipmunk under the platform DLEXT (.bundle on macOS); refuse Apple's
+  system Ruby / Ruby < 3.2; check for Xcode CLT and OpenGL/GLUT frameworks.
+- chipmunk: build with -fno-finite-math-only so infinite-mass static
+  bodies stay correct under modern clang's -ffast-math.
+- engine: pass -useWorkingDir to Apple GLUT so it doesn't chdir away and
+  doesn't see gl_tail's own CLI flags.
+- README/CLAUDE.md: macOS install instructions; .gitignore for .bundle/.dSYM.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013kYwHzrj5ef427USqzf3UF
+---
+ .gitignore                              |  4 ++
+ CLAUDE.md                               |  5 +-
+ README                                  | 14 ++++--
+ bin/setup                               | 64 ++++++++++++++++++++++---
+ lib/gl_tail/engine.rb                   |  9 +++-
+ vendor/chipmunk/ext/chipmunk/extconf.rb |  5 +-
+ 6 files changed, 88 insertions(+), 13 deletions(-)
+
+diff --git a/.gitignore b/.gitignore
+index 1f746c6..597ef17 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -8,6 +8,10 @@ vendor/chipmunk/mkmf.log
+ vendor/chipmunk/*.o
+ vendor/chipmunk/*.so
+ vendor/chipmunk/lib/*.so
++vendor/chipmunk/*.bundle
++vendor/chipmunk/lib/*.bundle
++vendor/chipmunk/*.dSYM/
++.DS_Store
+ 
+ # Bundler / local config
+ .bundle/
+diff --git a/CLAUDE.md b/CLAUDE.md
+index 4d3c514..8b236e9 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -32,7 +32,10 @@ The codebase was last touched against Ruby 2.1 (`.versions.conf` still says `rub
+ - `bin/gl_tail` had `trap('KILL')` (illegal — SIGKILL is untrappable) and a `require <relative path>` (broken since Ruby 1.9 but somehow tolerated). Both fixed.
+ - `vendor/chipmunk/lib/chipmunk.rb` previously referenced the long-removed `Config::CONFIG` constant; it now uses `RbConfig::CONFIG`.
+ 
+-System libraries required: GL, GLU, freeglut, plus a working display (X or XWayland). SSH key auth or in-config passwords are needed for remote sources.
++- **macOS** builds against Apple's OpenGL/GLUT frameworks with Apple clang. `bin/setup` probes which `-Wno-error=` flags the compiler accepts (clang needs `incompatible-function-pointer-types`, which GCC rejects), installs the chipmunk extension under its platform `DLEXT` (`chipmunk.bundle` on macOS), and refuses Apple's system Ruby. `Engine#start` passes `-useWorkingDir` to `glutInit` on Darwin because Apple GLUT otherwise chdirs to the executable's directory.
++- chipmunk is compiled with `-ffast-math -fno-finite-math-only`: modern clang assumes no infinities under plain `-ffast-math`, but static bodies use infinite mass.
++
++System libraries required: GL, GLU, freeglut, plus a working display (X or XWayland) on Linux; on macOS just the Xcode Command Line Tools. SSH key auth or in-config passwords are needed for remote sources.
+ 
+ ## Architecture
+ 
+diff --git a/README b/README
+index b358723..7ff69ad 100644
+--- a/README
++++ b/README
+@@ -38,9 +38,17 @@ Installation instructions (Mandriva/RedHat):
+   sudo urpmi libmesagl1-devel libmesaglut3-devel ruby-rbogl
+   sudo gem install net-ssh opengl --pre -r
+ 
+-Installation instructions (Mac OS/X):
+-  <install ruby & rubygems>
+-  sudo gem install net-ssh opengl --pre file-tail -r
++Installation instructions (macOS, Apple Silicon or Intel):
++  xcode-select --install          # Command Line Tools (clang + OpenGL/GLUT frameworks)
++  brew install ruby               # Ruby 3.2+; Apple's /usr/bin/ruby is too old
++  export PATH="$(brew --prefix ruby)/bin:$PATH"
++  gem install bundler
++  bundle install && bin/setup     # bin/setup builds the vendored chipmunk extension
++  bundle exec ruby bin/gl_tail --new my.yaml
++  bundle exec ruby bin/gl_tail my.yaml
++
++  glTail draws with Apple's built-in OpenGL and GLUT frameworks (deprecated by
++  Apple, but still shipped); no XQuartz or Homebrew freeglut is needed.
+ 
+ Installation instructions (Windows):
+   One-click Ruby installer from http://rubyforge.org/projects/rubyinstaller/
+diff --git a/bin/setup b/bin/setup
+index 19042a7..8d44056 100755
+--- a/bin/setup
++++ b/bin/setup
+@@ -1,11 +1,16 @@
+ #!/usr/bin/env bash
+ # One-shot modernization setup. Run after cloning, or whenever the vendored
+-# chipmunk source changes. Safe to re-run.
++# chipmunk source changes. Safe to re-run. Works on Linux (GCC or clang) and
++# macOS (Apple clang).
+ #
+ # Why this exists:
+-#   - GCC 14+ promotes several historical warnings (incompatible-pointer-types,
+-#     int-conversion, implicit-function-declaration) to errors. Most of the
+-#     C-extension gems gltail depends on were written before that.
++#   - GCC 14+ and clang 16+ (incl. Apple clang from Xcode 15 onwards) promote
++#     several historical warnings (incompatible-pointer-types, int-conversion,
++#     implicit-function-declaration, incompatible-function-pointer-types, ...)
++#     to errors. Most of the C-extension gems gltail depends on were written
++#     before that. GCC and clang name some of these diagnostics differently,
++#     and each rejects the other's -Wno-error=<name>, so the flags are probed
++#     against the compiler Ruby actually uses.
+ #   - Bundler does not auto-build C extensions for `path:` gems, so the
+ #     vendored chipmunk under vendor/chipmunk/ needs an explicit make.
+ set -euo pipefail
+@@ -13,7 +18,48 @@ set -euo pipefail
+ cd "$(dirname "$0")/.."
+ ROOT="$PWD"
+ 
+-CFLAGS_RELAX="-Wno-error=incompatible-pointer-types -Wno-error=int-conversion -Wno-error=implicit-function-declaration"
++ruby_check="$(ruby -e 'print Gem::Version.new(RUBY_VERSION) >= Gem::Version.new("3.2") ? "ok" : RUBY_VERSION' 2>/dev/null || echo missing)"
++if [ "$ruby_check" != "ok" ]; then
++  echo "glTail needs Ruby 3.2 or newer (found: ${ruby_check})." >&2
++  if [ "$(uname -s)" = "Darwin" ]; then
++    echo "On macOS, install it with Homebrew: brew install ruby" >&2
++    echo "then put \$(brew --prefix ruby)/bin first in your PATH." >&2
++  fi
++  exit 1
++fi
++
++if [ "$(uname -s)" = "Darwin" ]; then
++  if [ "$(command -v ruby)" = "/usr/bin/ruby" ]; then
++    echo "Refusing to use Apple's system Ruby (/usr/bin/ruby)." >&2
++    echo "Install Ruby with Homebrew (brew install ruby) or rbenv/asdf/mise and put it first in your PATH." >&2
++    exit 1
++  fi
++  if ! xcode-select -p >/dev/null 2>&1; then
++    echo "The Xcode Command Line Tools are required: xcode-select --install" >&2
++    exit 1
++  fi
++  SDK="$(xcrun --show-sdk-path 2>/dev/null || true)"
++  for fw in OpenGL GLUT; do
++    if [ -n "$SDK" ] && [ ! -d "$SDK/System/Library/Frameworks/${fw}.framework" ]; then
++      echo "Warning: ${fw}.framework is missing from the macOS SDK at $SDK." >&2
++      echo "         glTail renders through Apple's (deprecated) OpenGL/GLUT; the build will likely fail." >&2
++    fi
++  done
++fi
++
++CC_BIN="$(ruby -rrbconfig -e 'print RbConfig::CONFIG["CC"]')"
++
++# Keep only the -Wno-error=... flags this compiler understands.
++CFLAGS_RELAX=""
++for diag in incompatible-pointer-types int-conversion implicit-function-declaration \
++            incompatible-function-pointer-types implicit-int; do
++  flag="-Wno-error=${diag}"
++  if echo 'int x;' | $CC_BIN $flag -Werror -x c -c -o /dev/null - >/dev/null 2>&1; then
++    CFLAGS_RELAX="${CFLAGS_RELAX:+$CFLAGS_RELAX }${flag}"
++  fi
++done
++echo "Compiler: ${CC_BIN}"
++echo "Relaxed diagnostics: ${CFLAGS_RELAX:-<none>}"
+ 
+ # Wire the relaxed CFLAGS into bundler so opengl, glu, glut all build.
+ # These end up in .bundle/config as project-local settings.
+@@ -24,13 +70,17 @@ bundle config set --local build.glut   "--with-cflags=${CFLAGS_RELAX}"
+ bundle install
+ 
+ # Now build the vendored chipmunk extension into vendor/chipmunk/lib/.
++# Ruby extensions are chipmunk.so on Linux and chipmunk.bundle on macOS.
++DLEXT="$(ruby -rrbconfig -e 'print RbConfig::CONFIG["DLEXT"]')"
+ export CFLAGS="${CFLAGS:-} ${CFLAGS_RELAX}"
+ cd "$ROOT/vendor/chipmunk"
+-rm -f Makefile mkmf.log *.o *.so lib/chipmunk.so
++rm -f Makefile mkmf.log *.o *.so *.bundle lib/chipmunk.so lib/chipmunk.bundle
++rm -rf *.dSYM
+ ruby ext/chipmunk/extconf.rb
+ make
+-mv chipmunk.so lib/chipmunk.so
++mv "chipmunk.${DLEXT}" "lib/chipmunk.${DLEXT}"
+ rm -f Makefile mkmf.log *.o
++rm -rf *.dSYM
+ 
+ echo
+ echo "Setup complete. Run with:"
+diff --git a/lib/gl_tail/engine.rb b/lib/gl_tail/engine.rb
+index 8621a2f..684dea0 100644
+--- a/lib/gl_tail/engine.rb
++++ b/lib/gl_tail/engine.rb
+@@ -319,7 +319,14 @@ module GlTail
+     end
+ 
+     def start
+-      glutInit()
++      if RUBY_PLATFORM =~ /darwin/
++        # Apple's GLUT chdirs to the executable's directory unless told not
++        # to, which breaks relative log/key paths. Also keep gl_tail's own
++        # command-line flags away from GLUT's argument parser.
++        glutInit([$0, '-useWorkingDir'])
++      else
++        glutInit()
++      end
+       glutInitDisplayMode(GLUT_RGB | GLUT_DOUBLE)
+ 
+       glutInitWindowPosition(0, 0)
+diff --git a/vendor/chipmunk/ext/chipmunk/extconf.rb b/vendor/chipmunk/ext/chipmunk/extconf.rb
+index 41d8249..d493297 100644
+--- a/vendor/chipmunk/ext/chipmunk/extconf.rb
++++ b/vendor/chipmunk/ext/chipmunk/extconf.rb
+@@ -52,6 +52,9 @@ if enable_config("64", false)
+   $CFLAGS += ' -m64'
+ end
+ 
+-$CFLAGS += ' -std=gnu99 -ffast-math -DNDEBUG '
++# -ffast-math implies -ffinite-math-only, which lets modern compilers (clang
++# 18+, Apple clang included) assume INFINITY never occurs. Chipmunk uses
++# infinite mass/moment for static bodies, so keep infinities well-defined.
++$CFLAGS += ' -std=gnu99 -ffast-math -fno-finite-math-only -DNDEBUG '
+ create_makefile('chipmunk')
+ 
+-- 
+2.43.0
+

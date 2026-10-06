@@ -1,0 +1,224 @@
+From 460c48eaaa991159334482d97a063e4c5193f8d0 Mon Sep 17 00:00:00 2001
+From: gogo <gogo@bluedynamics.com>
+Date: Tue, 6 Oct 2026 11:43:10 +0200
+Subject: [PATCH] Add speed-over-physics options for heavy traffic
+
+- blob_collisions: false (config) puts all blobs in one chipmunk group
+  so they don't collide with each other; while bouncing is off they get
+  no collision shape at all. Physics per frame at 4000 blobs drops from
+  ~34 ms to ~0.1 ms (shape-less) or ~16 ms (bouncing on).
+- max_blobs: N caps blobs in flight, measured from the previous frame's
+  drawn activities; requests over the cap still count in the columns.
+- --fast enables both (max 2000); 'c' toggles collisions at runtime.
+- Defaults unchanged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013kYwHzrj5ef427USqzf3UF
+---
+ CLAUDE.md              |  4 +++-
+ README                 |  8 ++++++++
+ bin/gl_tail            |  9 +++++++++
+ dist/config.yaml       |  3 +++
+ lib/gl_tail/config.rb  |  8 ++++++++
+ lib/gl_tail/element.rb | 25 ++++++++++++++++++-------
+ lib/gl_tail/engine.rb  | 16 ++++++++++++++++
+ 7 files changed, 65 insertions(+), 8 deletions(-)
+
+diff --git a/CLAUDE.md b/CLAUDE.md
+index 57ef560..50405cd 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -20,7 +20,9 @@ Note: most flags other than `--new`, `--help`, and `--version` require a config-
+ 
+ There is no real test suite — `test/test_gl_tail.rb` is empty.
+ 
+-Runtime keys while the visualizer is running: `f` toggles target FPS, `b` cycles default blob type, `space` toggles bouncing, `shift+f` toggles fullscreen. `SIGUSR2` toggles debug level.
++Runtime keys while the visualizer is running: `f` toggles target FPS, `b` cycles default blob type, `space` toggles bouncing, `c` toggles blob-to-blob collisions, `shift+f` toggles fullscreen.
++
++Performance knobs (`config:` section, or `--fast`): `blob_collisions: false` puts blobs in one chipmunk group (no blob/blob contacts) and, while bouncing is off, skips the collision shape entirely — measured ~34 ms → ~0.1 ms physics per frame at 4000 blobs. `max_blobs: N` caps blobs in flight, using the previous frame's drawn-activity count (`Engine#blob_budget_left?`), so it can't drift; capped requests are still counted. `SIGUSR2` toggles debug level.
+ 
+ ## Runtime dependencies & modernization notes
+ 
+diff --git a/README b/README
+index 8d6a72b..85d8a2a 100644
+--- a/README
++++ b/README
+@@ -31,6 +31,14 @@ Piping logs in (like logstalgia):
+   screen/column settings. If the container logs requests to stderr, add 2>&1
+   inside the remote command.
+ 
++Performance:
++  Every request becomes several physics blobs, and blobs colliding with each
++  other gets expensive fast (about 34 ms per frame for 4000 blobs). Start with
++  --fast to turn blob-to-blob collisions off and cap the blobs in flight at
++  2000; requests over the cap are still counted in the columns. Or set
++  blob_collisions: false and/or max_blobs: N in the config: section. Press 'c'
++  while running to toggle collisions for new blobs.
++
+   You can also press 'f' while running to toggle the attempted frames per second. Or 'b'
+   to change default blob type, and space to toggle bouncing.
+ 
+diff --git a/bin/gl_tail b/bin/gl_tail
+index 12f7baf..3104aef 100755
+--- a/bin/gl_tail
++++ b/bin/gl_tail
+@@ -42,6 +42,8 @@ ARGV.each do |arg|
+          '[--stdin|-]        Read log lines from stdin instead of the servers in the config',
+          '[--parser|-P NAME] Parser for --stdin (default: apache; see --parsers)',
+          '[--name|-N NAME]   Site name shown for --stdin (default: stdin)',
++         '[--fast]           Favour speed over physics: no blob-to-blob collisions,',
++         '                   at most 2000 blobs in flight (keys: c toggles collisions)',
+          '[configfile]       The YAML config file you wish to load (default = gl_tail.yaml;',
+          '                   optional with --stdin, which then uses the built-in defaults)',
+          '',
+@@ -50,6 +52,8 @@ ARGV.each do |arg|
+     exit
+   when '-stdin', '--stdin', '-'
+     @stdin = true
++  when '-fast', '--fast'
++    @fast = true
+   when '-version', '--version'
+     @print = :version
+   when '-new', '--new', '-n'
+@@ -153,5 +157,10 @@ end
+ 
+ config = GlTail::Config.parse_yaml(file, overrides)
+ 
++if defined? @fast
++  config.screen.blob_collisions = false
++  config.screen.max_blobs = 2000 if config.screen.max_blobs.to_i <= 0
++end
++
+ engine = GlTail::Engine.new(config)
+ engine.start
+diff --git a/dist/config.yaml b/dist/config.yaml
+index d7eae12..ee1574b 100644
+--- a/dist/config.yaml
++++ b/dist/config.yaml
+@@ -29,6 +29,9 @@ config:
+     max_blob_size: 0.04
+     highlight_color: orange
+     bounce: false
++    # Performance under heavy traffic (or start gl_tail with --fast):
++    # blob_collisions: false   # blobs don't collide with each other; much cheaper
++    # max_blobs: 2000          # cap on blobs in flight; 0 = unlimited
+     left_column:
+         size: 25
+         alignment: -0.99
+diff --git a/lib/gl_tail/config.rb b/lib/gl_tail/config.rb
+index 2b8c95d..7ce1ce0 100644
+--- a/lib/gl_tail/config.rb
++++ b/lib/gl_tail/config.rb
+@@ -168,6 +168,14 @@ module GlTail
+ 
+     config_attribute :highlight_color, 'FIXME: add description', :type => :color
+ 
++    # Performance knobs for heavy traffic (see README "Performance").
++    config_attribute :blob_collisions, 'Let blobs collide with each other (default true). false is far cheaper under heavy traffic; blobs still bounce off the walls.'
++    config_attribute :max_blobs, 'Maximum number of blobs in flight (default 0 = unlimited). Requests beyond it are still counted in the columns, just not drawn as blobs.'
++
++    def blob_collisions?
++      !(blob_collisions == false || blob_collisions.to_s.downcase == 'false')
++    end
++
+     attr_accessor :aspect, :line_size, :top, :bitmap_mode
+ 
+     def initialize(config)
+diff --git a/lib/gl_tail/element.rb b/lib/gl_tail/element.rb
+index f9a0ec2..b9b88cd 100644
+--- a/lib/gl_tail/element.rb
++++ b/lib/gl_tail/element.rb
+@@ -114,7 +114,7 @@ class Element
+       if a.x > 1.0 || a.x < -1.0 || a.y < cutoff
+         if a.body 
+           engine.space.remove_body(a.body)
+-          engine.space.remove_shape(a.shape)
++          engine.space.remove_shape(a.shape) if a.shape
+           a.free_vertex_lists
+         end 
+         @delete <<  a
+@@ -318,6 +318,10 @@ class Element
+         a.wy = @wy + 0.05
+         @activities.push a
+       elsif type != 4
++        # Over the blob cap: the request is already counted, skip its blob.
++        next unless engine.blob_budget_left?
++        engine.blob_spawned
++
+         if @x >= 0
+           a =  Activity.new(url, (@block.alignment - (@block_width_times_8+64) / (engine.screen.window_width / 2.0)), @y + engine.screen.line_size/2, @z, color, size, type)
+         else
+@@ -336,12 +340,19 @@ class Element
+           else 
+             a.body.v = CP::Vec2.new(-350,0)
+           end 
+-          a.shape = CP::Shape::Circle.new(a.body, bs, CP::Vec2.new(0.0, 0.0))
+-          a.shape.e = 0.1 # Elasticity
+-          a.shape.u = 1   # Friction
+-
+           engine.space.add_body(a.body)
+-          engine.space.add_shape(a.shape)
++
++          # Collision shapes are what make physics expensive. Without
++          # blob-to-blob collisions, a blob only needs a shape to bounce off
++          # the walls; otherwise it's a plain body that just falls.
++          collide = engine.screen.blob_collisions?
++          if collide || engine.screen.bounce
++            a.shape = CP::Shape::Circle.new(a.body, bs, CP::Vec2.new(0.0, 0.0))
++            a.shape.e = 0.1 # Elasticity
++            a.shape.u = 1   # Friction
++            a.shape.group = 1 unless collide # same group = no blob/blob contacts
++            engine.space.add_shape(a.shape)
++          end
+         end
+       end 
+     end
+@@ -351,7 +362,7 @@ class Element
+       if a.body
+         if a.x > 1.0 || a.x < -1.0 || a.y < -(engine.screen.aspect*1.5)
+           engine.space.remove_body(a.body)
+-          engine.space.remove_shape(a.shape)
++          engine.space.remove_shape(a.shape) if a.shape
+           @delete << a
+           a.free_vertex_lists
+         else 
+diff --git a/lib/gl_tail/engine.rb b/lib/gl_tail/engine.rb
+index 4213877..15a5149 100644
+--- a/lib/gl_tail/engine.rb
++++ b/lib/gl_tail/engine.rb
+@@ -30,9 +30,22 @@ module GlTail
+     end
+ 
+     def reset_stats
++      # Activities drawn in the previous frame = blobs currently in flight.
++      @blobs_in_flight = @stats ? @stats[1] : 0
++      @blobs_spawned = 0
+       @stats = [0, 0]
+     end
+ 
++    # True while another blob may be spawned this frame (screen.max_blobs).
++    def blob_budget_left?
++      max = @config.screen.max_blobs.to_i
++      max <= 0 || (@blobs_in_flight.to_i + @blobs_spawned.to_i) < max
++    end
++
++    def blob_spawned
++      @blobs_spawned += 1
++    end
++
+     def stats
+       @stats
+     end
+@@ -171,6 +184,9 @@ module GlTail
+       when 70 #F (shift + f) - toggle fullscreen mode
+         @config.screen.fullscreen = !@config.screen.fullscreen
+         set_fullscreen @config.screen.fullscreen
++      when 99 #c - toggle blob-to-blob collisions (applies to new blobs)
++        @config.screen.blob_collisions = !@config.screen.blob_collisions?
++        puts "Blob collisions: #{@config.screen.blob_collisions}"
+       when 98 #v
+         @config.screen.mode = 1 - @config.screen.mode.to_i
+         BlobStore.empty
+-- 
+2.43.0
+

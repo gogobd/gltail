@@ -1,0 +1,157 @@
+From 912c1772c1edc9e5e941bcf63f6007258e94abd8 Mon Sep 17 00:00:00 2001
+From: gogo <gogo@bluedynamics.com>
+Date: Tue, 6 Oct 2026 09:56:20 +0200
+Subject: [PATCH 1/2] Docs: run bin/setup alone; bundle install first fails on
+ clang
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013kYwHzrj5ef427USqzf3UF
+---
+ CLAUDE.md | 2 +-
+ README    | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/CLAUDE.md b/CLAUDE.md
+index 8b236e9..88cfcbf 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -8,7 +8,7 @@ glTail is a Ruby program that tails log files (typically over SSH from remote se
+ 
+ ## Commands
+ 
+-- First-time setup: `bundle install && bin/setup` — `bin/setup` builds the vendored chipmunk C extension; bundler does *not* auto-build extensions for `path:` gems, so this step is mandatory and must be re-run if the chipmunk source changes.
++- First-time setup: `bin/setup` (it runs `bundle install` itself; running `bundle install` first fails because the per-compiler build flags are not configured yet) — it also builds the vendored chipmunk C extension; bundler does *not* auto-build extensions for `path:` gems, so this step is mandatory and must be re-run if the chipmunk source changes.
+ - Run: `bundle exec ruby bin/gl_tail <configfile>` (defaults to `gl_tail.yaml` in the cwd; always run via `bundle exec` so the vendored chipmunk and the right opengl/glu/glut are loaded).
+ - Generate a starter config: `bin/gl_tail --new myconfig.yaml` (copies `dist/config.yaml`).
+ - List built-in parsers: `bin/gl_tail <any-config> --parsers`.
+diff --git a/README b/README
+index 7ff69ad..364ab66 100644
+--- a/README
++++ b/README
+@@ -43,7 +43,7 @@ Installation instructions (macOS, Apple Silicon or Intel):
+   brew install ruby               # Ruby 3.2+; Apple's /usr/bin/ruby is too old
+   export PATH="$(brew --prefix ruby)/bin:$PATH"
+   gem install bundler
+-  bundle install && bin/setup     # bin/setup builds the vendored chipmunk extension
++  bin/setup                       # configures build flags, runs bundle install, builds chipmunk
+   bundle exec ruby bin/gl_tail --new my.yaml
+   bundle exec ruby bin/gl_tail my.yaml
+ 
+-- 
+2.43.0
+
+
+From 29610756c800a955ab4e9ff5ea869f39be8dd94b Mon Sep 17 00:00:00 2001
+From: gogo <gogo@bluedynamics.com>
+Date: Tue, 6 Oct 2026 10:00:15 +0200
+Subject: [PATCH 2/2] Fix glut build on macOS; pass all build flags through
+ Bundler
+
+- Bundler shell-splits build.<gem> settings, so only the first
+  -Wno-error flag ever reached extconf. Quote the flag list.
+- Add vendor/glut-macos-compat.h, force-included when building the
+  glut gem on macOS: glut 8.3.0 binds eight freeglut-only functions
+  that Apple's GLUT.framework lacks. glTail uses none of them.
+- Silence Apple's OpenGL deprecation warnings during the build.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013kYwHzrj5ef427USqzf3UF
+---
+ CLAUDE.md                  |  2 +-
+ bin/setup                  | 27 ++++++++++++++++++++++-----
+ vendor/glut-macos-compat.h | 32 ++++++++++++++++++++++++++++++++
+ 3 files changed, 55 insertions(+), 6 deletions(-)
+ create mode 100644 vendor/glut-macos-compat.h
+
+diff --git a/CLAUDE.md b/CLAUDE.md
+index 88cfcbf..1b520ae 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -27,7 +27,7 @@ Runtime keys while the visualizer is running: `f` toggles target FPS, `b` cycles
+ The codebase was last touched against Ruby 2.1 (`.versions.conf` still says `ruby-2.1.4`); it now runs on Ruby 3.x+ but only after a small set of compatibility patches:
+ 
+ - **chipmunk 5.3.4.5** is vendored under `vendor/chipmunk/` and patched for Ruby 3.x's stricter `rb_funcall` argc check (`rb_cpSpace.c` lines ~141 and ~449). The upstream gem on rubygems.org will not compile against Ruby 3+. Bundler picks the vendored copy via the `gem 'chipmunk', path: 'vendor/chipmunk'` line at the top of `Gemfile`.
+-- **opengl/glu/glut 0.10/8.x** are split gems now (the old `opengl` gem bundled all three). All three need GCC 14+ warning-to-error demotions to build; that's wired into `.bundle/config` via `bundle config set build.<gem> --with-cflags=...` (see `.bundle/config`). If you bundle on a fresh checkout, run `bin/setup` after `bundle install` to (re)build the vendored chipmunk too.
++- **opengl/glu/glut 0.10/8.x** are split gems now (the old `opengl` gem bundled all three). All three need GCC 14+ warning-to-error demotions to build; that's wired into `.bundle/config` via `bundle config set build.<gem> "--with-cflags='...'"` — the inner quotes matter, because Bundler shell-splits the value and would otherwise pass only the first flag. On macOS the glut gem also gets `-include vendor/glut-macos-compat.h`, which supplies the eight freeglut-only functions glut 8.3.0 binds but Apple's GLUT lacks (glTail calls none of them). If you bundle on a fresh checkout, run `bin/setup` after `bundle install` to (re)build the vendored chipmunk too.
+ - **logger** and **resolv-replace** were dropped from Ruby's default gems in 3.4/3.5; both are now declared in `gltail.gemspec`.
+ - `bin/gl_tail` had `trap('KILL')` (illegal — SIGKILL is untrappable) and a `require <relative path>` (broken since Ruby 1.9 but somehow tolerated). Both fixed.
+ - `vendor/chipmunk/lib/chipmunk.rb` previously referenced the long-removed `Config::CONFIG` constant; it now uses `RbConfig::CONFIG`.
+diff --git a/bin/setup b/bin/setup
+index 8d44056..9b6ebaa 100755
+--- a/bin/setup
++++ b/bin/setup
+@@ -61,11 +61,28 @@ done
+ echo "Compiler: ${CC_BIN}"
+ echo "Relaxed diagnostics: ${CFLAGS_RELAX:-<none>}"
+ 
+-# Wire the relaxed CFLAGS into bundler so opengl, glu, glut all build.
+-# These end up in .bundle/config as project-local settings.
+-bundle config set --local build.opengl "--with-cflags=${CFLAGS_RELAX}"
+-bundle config set --local build.glu    "--with-cflags=${CFLAGS_RELAX}"
+-bundle config set --local build.glut   "--with-cflags=${CFLAGS_RELAX}"
++GL_CFLAGS="${CFLAGS_RELAX}"
++GLUT_CFLAGS="${CFLAGS_RELAX}"
++if [ "$(uname -s)" = "Darwin" ]; then
++  # Apple marks all of OpenGL/GLUT deprecated; silence hundreds of warnings.
++  GL_CFLAGS="${GL_CFLAGS} -DGL_SILENCE_DEPRECATION"
++  # Apple's GLUT lacks the freeglut-only functions the glut gem binds.
++  case "$ROOT" in
++    *\'*|*\"*|*\\*)
++      echo "The glTail checkout path must not contain quotes or backslashes: $ROOT" >&2
++      exit 1 ;;
++  esac
++  COMPAT_HEADER="${ROOT// /\\ }/vendor/glut-macos-compat.h"
++  GLUT_CFLAGS="${GL_CFLAGS} -include ${COMPAT_HEADER}"
++fi
++
++# Wire the CFLAGS into bundler so opengl, glu, glut all build. These end up
++# in .bundle/config as project-local settings. Bundler shell-splits these
++# values, so the flag list must be quoted to reach extconf as one argument
++# (unquoted, every flag after the first is silently dropped).
++bundle config set --local build.opengl "--with-cflags='${GL_CFLAGS}'"
++bundle config set --local build.glu    "--with-cflags='${GL_CFLAGS}'"
++bundle config set --local build.glut   "--with-cflags='${GLUT_CFLAGS}'"
+ 
+ bundle install
+ 
+diff --git a/vendor/glut-macos-compat.h b/vendor/glut-macos-compat.h
+new file mode 100644
+index 0000000..7ad3f0f
+--- /dev/null
++++ b/vendor/glut-macos-compat.h
+@@ -0,0 +1,32 @@
++/*
++ * Force-included (clang -include) by bin/setup when the `glut` gem is built
++ * against Apple's GLUT.framework on macOS.
++ *
++ * glut 8.3.0's ext/glut/glut_ext.c unconditionally binds eight freeglut-only
++ * functions. Apple's GLUT has none of them, so modern clang refuses to compile
++ * the gem ("call to undeclared function"). glTail never calls any of these,
++ * so they are provided here as local stand-ins: glutMainLoopEvent maps to
++ * Apple's equivalent (glutCheckLoop); the rest are no-ops.
++ *
++ * Skipped when a real freeglut header is visible, since the gem's extconf
++ * prefers <GL/freeglut.h> and freeglut declares the real functions.
++ */
++#ifndef GLTAIL_GLUT_MACOS_COMPAT_H
++#define GLTAIL_GLUT_MACOS_COMPAT_H
++
++#if defined(__APPLE__) && !__has_include(<GL/freeglut.h>)
++
++extern void glutCheckLoop(void);
++
++static inline void glutMainLoopEvent(void) { glutCheckLoop(); }
++static inline void glutLeaveMainLoop(void) {}
++static inline void glutExit(void) {}
++static inline void glutFullScreenToggle(void) {}
++static inline void glutLeaveFullScreen(void) {}
++static inline void glutInitContextVersion(int major, int minor) { (void)major; (void)minor; }
++static inline void glutInitContextFlags(int flags) { (void)flags; }
++static inline void glutInitContextProfile(int profile) { (void)profile; }
++
++#endif
++
++#endif /* GLTAIL_GLUT_MACOS_COMPAT_H */
+-- 
+2.43.0
+

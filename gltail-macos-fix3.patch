@@ -1,0 +1,57 @@
+From d31d24b207062b53f35b05dcc5e361a14e9edf2f Mon Sep 17 00:00:00 2001
+From: gogo <gogo@bluedynamics.com>
+Date: Tue, 6 Oct 2026 10:09:25 +0200
+Subject: [PATCH] Fix SIGABRT in glutInit on macOS
+
+Apple GLUT removes consumed options (-useWorkingDir) by shifting argv
+up to its NULL terminator; the glut gem's argv is not NULL-terminated,
+so the shift overruns the buffer and the process aborts. Restore the
+working directory after glutInit instead.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013kYwHzrj5ef427USqzf3UF
+---
+ CLAUDE.md             |  2 +-
+ lib/gl_tail/engine.rb | 13 +++++++++----
+ 2 files changed, 10 insertions(+), 5 deletions(-)
+
+diff --git a/CLAUDE.md b/CLAUDE.md
+index 1b520ae..e57d52c 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -32,7 +32,7 @@ The codebase was last touched against Ruby 2.1 (`.versions.conf` still says `rub
+ - `bin/gl_tail` had `trap('KILL')` (illegal — SIGKILL is untrappable) and a `require <relative path>` (broken since Ruby 1.9 but somehow tolerated). Both fixed.
+ - `vendor/chipmunk/lib/chipmunk.rb` previously referenced the long-removed `Config::CONFIG` constant; it now uses `RbConfig::CONFIG`.
+ 
+-- **macOS** builds against Apple's OpenGL/GLUT frameworks with Apple clang. `bin/setup` probes which `-Wno-error=` flags the compiler accepts (clang needs `incompatible-function-pointer-types`, which GCC rejects), installs the chipmunk extension under its platform `DLEXT` (`chipmunk.bundle` on macOS), and refuses Apple's system Ruby. `Engine#start` passes `-useWorkingDir` to `glutInit` on Darwin because Apple GLUT otherwise chdirs to the executable's directory.
++- **macOS** builds against Apple's OpenGL/GLUT frameworks with Apple clang. `bin/setup` probes which `-Wno-error=` flags the compiler accepts (clang needs `incompatible-function-pointer-types`, which GCC rejects), installs the chipmunk extension under its platform `DLEXT` (`chipmunk.bundle` on macOS), and refuses Apple's system Ruby. `Engine#start` restores the working directory after `glutInit` on Darwin because Apple GLUT chdirs to the executable's directory. Do not pass `-useWorkingDir` instead: Apple GLUT shifts consumed options out of argv up to its NULL terminator, the glut gem's argv has none, and the process aborts (SIGABRT).
+ - chipmunk is compiled with `-ffast-math -fno-finite-math-only`: modern clang assumes no infinities under plain `-ffast-math`, but static bodies use infinite mass.
+ 
+ System libraries required: GL, GLU, freeglut, plus a working display (X or XWayland) on Linux; on macOS just the Xcode Command Line Tools. SSH key auth or in-config passwords are needed for remote sources.
+diff --git a/lib/gl_tail/engine.rb b/lib/gl_tail/engine.rb
+index 684dea0..4213877 100644
+--- a/lib/gl_tail/engine.rb
++++ b/lib/gl_tail/engine.rb
+@@ -320,10 +320,15 @@ module GlTail
+ 
+     def start
+       if RUBY_PLATFORM =~ /darwin/
+-        # Apple's GLUT chdirs to the executable's directory unless told not
+-        # to, which breaks relative log/key paths. Also keep gl_tail's own
+-        # command-line flags away from GLUT's argument parser.
+-        glutInit([$0, '-useWorkingDir'])
++        # Apple's GLUT chdirs to the executable's directory during init, which
++        # breaks relative log/key paths, so restore the working directory.
++        # Don't pass -useWorkingDir instead: GLUT strips the options it
++        # consumes by shifting argv up to its NULL terminator, and the glut
++        # gem's argv has none, so that aborts the process. Passing only a
++        # program name also keeps gl_tail's own flags away from GLUT.
++        cwd = Dir.pwd
++        glutInit(['gl_tail'])
++        Dir.chdir(cwd)
+       else
+         glutInit()
+       end
+-- 
+2.43.0
+
