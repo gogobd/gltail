@@ -42,6 +42,7 @@ ARGV.each do |arg|
          '[--stdin|-]        Read log lines from stdin instead of the servers in the config',
          '[--parser|-P NAME] Parser for --stdin (default: apache; see --parsers)',
          '[--name|-N NAME]   Site name shown for --stdin (default: stdin)',
+         '[--per-second]     Show rates as requests per second (r/s) instead of r/m',
          '[--fast]           Under heavy load, run physics every 2nd/3rd frame',
          '                   instead of every frame (physics_rate: auto)',
          '[configfile]       The YAML config file you wish to load (default = gl_tail.yaml;',
@@ -54,6 +55,8 @@ ARGV.each do |arg|
     @stdin = true
   when '-fast', '--fast'
     @fast = true
+  when '--per-second', '-per-second'
+    @per_second = true
   when '-version', '--version'
     @print = :version
   when '-new', '--new', '-n'
@@ -159,6 +162,10 @@ config = GlTail::Config.parse_yaml(file, overrides)
 
 if defined? @fast
   config.screen.physics_rate = 'auto'
+end
+
+if defined? @per_second
+  config.screen.rate_unit = 'second'
 end
 
 engine = GlTail::Engine.new(config)

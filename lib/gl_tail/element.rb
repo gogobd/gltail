@@ -228,10 +228,11 @@ class Element
 
     case @block.show
     when 0
+      per_second = engine.screen.rate_per_second?
       if @rate == 0
-        txt = '     r/m '
+        txt = per_second ? '     r/s ' : '     r/m '
       else
-        txt = "#{sprintf('%8.2f',@rate * 60)} "
+        txt = "#{sprintf('%8.2f', per_second ? @rate : @rate * 60)} "
       end
     when 1
       if @total == 0

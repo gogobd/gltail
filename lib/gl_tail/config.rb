@@ -174,6 +174,12 @@ module GlTail
 
     config_attribute :physics_rate, 'Run the physics every Nth frame (1 = every frame, the default; 2-3 = cheaper, slightly less accurate bounces), or "auto" to drop to every 2nd/3rd frame only while the physics is expensive.'
 
+    config_attribute :rate_unit, 'Show rates per "minute" (r/m, the default) or per "second" (r/s)'
+
+    def rate_per_second?
+      %w[second seconds s sec].include?(rate_unit.to_s.downcase)
+    end
+
     def blob_collisions?
       !(blob_collisions == false || blob_collisions.to_s.downcase == 'false')
     end

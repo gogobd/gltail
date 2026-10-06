@@ -29,6 +29,7 @@ config:
     max_blob_size: 0.04
     highlight_color: orange
     bounce: false
+    # rate_unit: second        # show r/s instead of r/m (or start with --per-second)
     # Performance under heavy traffic:
     # physics_rate: auto       # 1 = physics every frame; 2/3 = every 2nd/3rd frame;
     #                          # auto = only when busy (same as --fast)
