@@ -30,7 +30,20 @@ module GlTail
     end
 
     def reset_stats
+      # Activities drawn in the previous frame = blobs currently in flight.
+      @blobs_in_flight = @stats ? @stats[1] : 0
+      @blobs_spawned = 0
       @stats = [0, 0]
+    end
+
+    # True while another blob may be spawned this frame (screen.max_blobs).
+    def blob_budget_left?
+      max = @config.screen.max_blobs.to_i
+      max <= 0 || (@blobs_in_flight.to_i + @blobs_spawned.to_i) < max
+    end
+
+    def blob_spawned
+      @blobs_spawned += 1
     end
 
     def stats
@@ -171,6 +184,9 @@ module GlTail
       when 70 #F (shift + f) - toggle fullscreen mode
         @config.screen.fullscreen = !@config.screen.fullscreen
         set_fullscreen @config.screen.fullscreen
+      when 99 #c - toggle blob-to-blob collisions (applies to new blobs)
+        @config.screen.blob_collisions = !@config.screen.blob_collisions?
+        puts "Blob collisions: #{@config.screen.blob_collisions}"
       when 98 #v
         @config.screen.mode = 1 - @config.screen.mode.to_i
         BlobStore.empty

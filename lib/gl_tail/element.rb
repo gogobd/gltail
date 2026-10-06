@@ -114,7 +114,7 @@ class Element
       if a.x > 1.0 || a.x < -1.0 || a.y < cutoff
         if a.body 
           engine.space.remove_body(a.body)
-          engine.space.remove_shape(a.shape)
+          engine.space.remove_shape(a.shape) if a.shape
           a.free_vertex_lists
         end 
         @delete <<  a
@@ -318,6 +318,10 @@ class Element
         a.wy = @wy + 0.05
         @activities.push a
       elsif type != 4
+        # Over the blob cap: the request is already counted, skip its blob.
+        next unless engine.blob_budget_left?
+        engine.blob_spawned
+
         if @x >= 0
           a =  Activity.new(url, (@block.alignment - (@block_width_times_8+64) / (engine.screen.window_width / 2.0)), @y + engine.screen.line_size/2, @z, color, size, type)
         else
@@ -336,12 +340,19 @@ class Element
           else 
             a.body.v = CP::Vec2.new(-350,0)
           end 
-          a.shape = CP::Shape::Circle.new(a.body, bs, CP::Vec2.new(0.0, 0.0))
-          a.shape.e = 0.1 # Elasticity
-          a.shape.u = 1   # Friction
-
           engine.space.add_body(a.body)
-          engine.space.add_shape(a.shape)
+
+          # Collision shapes are what make physics expensive. Without
+          # blob-to-blob collisions, a blob only needs a shape to bounce off
+          # the walls; otherwise it's a plain body that just falls.
+          collide = engine.screen.blob_collisions?
+          if collide || engine.screen.bounce
+            a.shape = CP::Shape::Circle.new(a.body, bs, CP::Vec2.new(0.0, 0.0))
+            a.shape.e = 0.1 # Elasticity
+            a.shape.u = 1   # Friction
+            a.shape.group = 1 unless collide # same group = no blob/blob contacts
+            engine.space.add_shape(a.shape)
+          end
         end
       end 
     end
@@ -351,7 +362,7 @@ class Element
       if a.body
         if a.x > 1.0 || a.x < -1.0 || a.y < -(engine.screen.aspect*1.5)
           engine.space.remove_body(a.body)
-          engine.space.remove_shape(a.shape)
+          engine.space.remove_shape(a.shape) if a.shape
           @delete << a
           a.free_vertex_lists
         else 

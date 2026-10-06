@@ -20,7 +20,9 @@ Note: most flags other than `--new`, `--help`, and `--version` require a config-
 
 There is no real test suite — `test/test_gl_tail.rb` is empty.
 
-Runtime keys while the visualizer is running: `f` toggles target FPS, `b` cycles default blob type, `space` toggles bouncing, `shift+f` toggles fullscreen. `SIGUSR2` toggles debug level.
+Runtime keys while the visualizer is running: `f` toggles target FPS, `b` cycles default blob type, `space` toggles bouncing, `c` toggles blob-to-blob collisions, `shift+f` toggles fullscreen.
+
+Performance knobs (`config:` section, or `--fast`): `blob_collisions: false` puts blobs in one chipmunk group (no blob/blob contacts) and, while bouncing is off, skips the collision shape entirely — measured ~34 ms → ~0.1 ms physics per frame at 4000 blobs. `max_blobs: N` caps blobs in flight, using the previous frame's drawn-activity count (`Engine#blob_budget_left?`), so it can't drift; capped requests are still counted. `SIGUSR2` toggles debug level.
 
 ## Runtime dependencies & modernization notes
 

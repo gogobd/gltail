@@ -168,6 +168,14 @@ module GlTail
 
     config_attribute :highlight_color, 'FIXME: add description', :type => :color
 
+    # Performance knobs for heavy traffic (see README "Performance").
+    config_attribute :blob_collisions, 'Let blobs collide with each other (default true). false is far cheaper under heavy traffic; blobs still bounce off the walls.'
+    config_attribute :max_blobs, 'Maximum number of blobs in flight (default 0 = unlimited). Requests beyond it are still counted in the columns, just not drawn as blobs.'
+
+    def blob_collisions?
+      !(blob_collisions == false || blob_collisions.to_s.downcase == 'false')
+    end
+
     attr_accessor :aspect, :line_size, :top, :bitmap_mode
 
     def initialize(config)

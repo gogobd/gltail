@@ -31,6 +31,14 @@ Piping logs in (like logstalgia):
   screen/column settings. If the container logs requests to stderr, add 2>&1
   inside the remote command.
 
+Performance:
+  Every request becomes several physics blobs, and blobs colliding with each
+  other gets expensive fast (about 34 ms per frame for 4000 blobs). Start with
+  --fast to turn blob-to-blob collisions off and cap the blobs in flight at
+  2000; requests over the cap are still counted in the columns. Or set
+  blob_collisions: false and/or max_blobs: N in the config: section. Press 'c'
+  while running to toggle collisions for new blobs.
+
   You can also press 'f' while running to toggle the attempted frames per second. Or 'b'
   to change default blob type, and space to toggle bouncing.
 

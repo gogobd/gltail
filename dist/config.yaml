@@ -29,6 +29,9 @@ config:
     max_blob_size: 0.04
     highlight_color: orange
     bounce: false
+    # Performance under heavy traffic (or start gl_tail with --fast):
+    # blob_collisions: false   # blobs don't collide with each other; much cheaper
+    # max_blobs: 2000          # cap on blobs in flight; 0 = unlimited
     left_column:
         size: 25
         alignment: -0.99
