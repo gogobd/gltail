@@ -29,6 +29,58 @@ module GlTail
       self.screen.highlight_color
     end
 
+    # Seconds of motion since the last physics step; blobs are drawn this far
+    # ahead along their velocity so motion stays smooth between steps.
+    attr_reader :physics_lag
+
+    AUTO_MAX_EVERY   = 3    # never step less often than every 3rd frame
+    AUTO_BUDGET_MS   = 4.0  # physics time per frame we aim to stay under
+
+    # Advances the physics by 1/60 s of simulated time per drawn frame, as
+    # before, but optionally in larger steps every Nth frame (physics_rate).
+    def step_physics
+      every = physics_every
+      @physics_frame = (@physics_frame || 0) + 1
+
+      if @physics_frame >= every
+        t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        @space.step(@physics_frame / 60.0)
+        took = (Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0) * 1000.0
+        adapt_physics_rate(took / @physics_frame) if physics_auto?
+        @physics_frame = 0
+        @physics_lag = 0.0
+      else
+        @physics_lag = @physics_frame / 60.0
+      end
+    end
+
+    def physics_auto?
+      @config.screen.physics_rate.to_s.downcase == 'auto'
+    end
+
+    def physics_every
+      return (@auto_every ||= 1) if physics_auto?
+      [@config.screen.physics_rate.to_i, 1].max
+    end
+
+    # Smoothed physics cost per frame; reconsider the step rate about once a
+    # second, stepping down when over budget and back up when there's room.
+    def adapt_physics_rate(ms_per_frame)
+      @physics_ms = @physics_ms ? @physics_ms * 0.9 + ms_per_frame * 0.1 : ms_per_frame
+      @adapt_frames = (@adapt_frames || 0) + @auto_every
+      return if @adapt_frames < 60
+      @adapt_frames = 0
+
+      if @physics_ms > AUTO_BUDGET_MS && @auto_every < AUTO_MAX_EVERY
+        @auto_every += 1
+      elsif @auto_every > 1 && @physics_ms * @auto_every / (@auto_every - 1) < AUTO_BUDGET_MS * 0.6
+        @auto_every -= 1
+      else
+        return
+      end
+      puts "Physics every #{@auto_every} frame(s) (#{'%.1f' % @physics_ms} ms/frame)" if $VRB > 0
+    end
+
     def reset_stats
       # Activities drawn in the previous frame = blobs currently in flight.
       @blobs_in_flight = @stats ? @stats[1] : 0
@@ -54,7 +106,7 @@ module GlTail
       @render_time ||= 0
       @t = Time.new
 
-      @space.step(1.0/60.0) if $PHYSICS
+      step_physics if $PHYSICS
 
       glClear(GL_COLOR_BUFFER_BIT);
       #    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);

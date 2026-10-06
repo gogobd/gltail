@@ -45,8 +45,16 @@ class Activity
 
     if @body
       p = body.p
-      @x = p.x / @screen_width
-      @y = p.y / @screen_height
+      lag = engine.physics_lag.to_f
+      if lag > 0.0
+        # Physics didn't step this frame: extrapolate along the velocity.
+        v = body.v
+        @x = (p.x + v.x * lag) / @screen_width
+        @y = (p.y + v.y * lag) / @screen_height
+      else
+        @x = p.x / @screen_width
+        @y = p.y / @screen_height
+      end
     else
       if @type != 5
         @x += @xi

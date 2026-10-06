@@ -33,11 +33,18 @@ Piping logs in (like logstalgia):
 
 Performance:
   Every request becomes several physics blobs, and blobs colliding with each
-  other gets expensive fast (about 34 ms per frame for 4000 blobs). Start with
-  --fast to turn blob-to-blob collisions off and cap the blobs in flight at
-  2000; requests over the cap are still counted in the columns. Or set
-  blob_collisions: false and/or max_blobs: N in the config: section. Press 'c'
-  while running to toggle collisions for new blobs.
+  other gets expensive fast (about 34 ms per frame for 4000 blobs).
+
+  --fast (or physics_rate: auto in the config: section) keeps every blob and
+  every bounce, but when the physics gets expensive it runs it every 2nd or
+  3rd frame instead of every frame, drawing blobs smoothly in between. This
+  roughly halves the physics cost; bounces are a few pixels less exact.
+  physics_rate: 2 or 3 forces a fixed rate.
+
+  If that's not enough: blob_collisions: false stops blobs colliding with
+  each other (near-zero physics cost; 'c' toggles it while running), and
+  max_blobs: N caps the blobs in flight (requests over the cap are still
+  counted in the columns).
 
   You can also press 'f' while running to toggle the attempted frames per second. Or 'b'
   to change default blob type, and space to toggle bouncing.

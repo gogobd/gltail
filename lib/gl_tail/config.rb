@@ -172,6 +172,8 @@ module GlTail
     config_attribute :blob_collisions, 'Let blobs collide with each other (default true). false is far cheaper under heavy traffic; blobs still bounce off the walls.'
     config_attribute :max_blobs, 'Maximum number of blobs in flight (default 0 = unlimited). Requests beyond it are still counted in the columns, just not drawn as blobs.'
 
+    config_attribute :physics_rate, 'Run the physics every Nth frame (1 = every frame, the default; 2-3 = cheaper, slightly less accurate bounces), or "auto" to drop to every 2nd/3rd frame only while the physics is expensive.'
+
     def blob_collisions?
       !(blob_collisions == false || blob_collisions.to_s.downcase == 'false')
     end

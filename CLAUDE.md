@@ -22,7 +22,7 @@ There is no real test suite — `test/test_gl_tail.rb` is empty.
 
 Runtime keys while the visualizer is running: `f` toggles target FPS, `b` cycles default blob type, `space` toggles bouncing, `c` toggles blob-to-blob collisions, `shift+f` toggles fullscreen.
 
-Performance knobs (`config:` section, or `--fast`): `blob_collisions: false` puts blobs in one chipmunk group (no blob/blob contacts) and, while bouncing is off, skips the collision shape entirely — measured ~34 ms → ~0.1 ms physics per frame at 4000 blobs. `max_blobs: N` caps blobs in flight, using the previous frame's drawn-activity count (`Engine#blob_budget_left?`), so it can't drift; capped requests are still counted. `SIGUSR2` toggles debug level.
+Performance knobs (`config:` section): `physics_rate: N|auto` steps chipmunk every Nth frame with dt N/60 (simulated time per drawn frame is unchanged) and `Activity#render` extrapolates body positions by `Engine#physics_lag`; `auto` (also `--fast`) adapts N in 1..3 against a ~4 ms/frame physics budget. Measured steady state: every 2nd frame ≈ half the physics cost, path deviation ≤ ~2 px. `blob_collisions: false` puts blobs in one chipmunk group (no blob/blob contacts) and, while bouncing is off, skips the collision shape entirely — measured ~34 ms → ~0.1 ms physics per frame at 4000 blobs. `max_blobs: N` caps blobs in flight, using the previous frame's drawn-activity count (`Engine#blob_budget_left?`), so it can't drift; capped requests are still counted. `SIGUSR2` toggles debug level.
 
 ## Runtime dependencies & modernization notes
 
