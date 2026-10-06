@@ -8,7 +8,7 @@ glTail is a Ruby program that tails log files (typically over SSH from remote se
 
 ## Commands
 
-- First-time setup: `bundle install && bin/setup` — `bin/setup` builds the vendored chipmunk C extension; bundler does *not* auto-build extensions for `path:` gems, so this step is mandatory and must be re-run if the chipmunk source changes.
+- First-time setup: `bin/setup` (it runs `bundle install` itself; running `bundle install` first fails because the per-compiler build flags are not configured yet) — it also builds the vendored chipmunk C extension; bundler does *not* auto-build extensions for `path:` gems, so this step is mandatory and must be re-run if the chipmunk source changes.
 - Run: `bundle exec ruby bin/gl_tail <configfile>` (defaults to `gl_tail.yaml` in the cwd; always run via `bundle exec` so the vendored chipmunk and the right opengl/glu/glut are loaded).
 - Generate a starter config: `bin/gl_tail --new myconfig.yaml` (copies `dist/config.yaml`).
 - List built-in parsers: `bin/gl_tail <any-config> --parsers`.

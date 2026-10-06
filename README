@@ -43,7 +43,7 @@ Installation instructions (macOS, Apple Silicon or Intel):
   brew install ruby               # Ruby 3.2+; Apple's /usr/bin/ruby is too old
   export PATH="$(brew --prefix ruby)/bin:$PATH"
   gem install bundler
-  bundle install && bin/setup     # bin/setup builds the vendored chipmunk extension
+  bin/setup                       # configures build flags, runs bundle install, builds chipmunk
   bundle exec ruby bin/gl_tail --new my.yaml
   bundle exec ruby bin/gl_tail my.yaml
 
