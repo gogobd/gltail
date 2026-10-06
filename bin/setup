@@ -61,11 +61,28 @@ done
 echo "Compiler: ${CC_BIN}"
 echo "Relaxed diagnostics: ${CFLAGS_RELAX:-<none>}"
 
-# Wire the relaxed CFLAGS into bundler so opengl, glu, glut all build.
-# These end up in .bundle/config as project-local settings.
-bundle config set --local build.opengl "--with-cflags=${CFLAGS_RELAX}"
-bundle config set --local build.glu    "--with-cflags=${CFLAGS_RELAX}"
-bundle config set --local build.glut   "--with-cflags=${CFLAGS_RELAX}"
+GL_CFLAGS="${CFLAGS_RELAX}"
+GLUT_CFLAGS="${CFLAGS_RELAX}"
+if [ "$(uname -s)" = "Darwin" ]; then
+  # Apple marks all of OpenGL/GLUT deprecated; silence hundreds of warnings.
+  GL_CFLAGS="${GL_CFLAGS} -DGL_SILENCE_DEPRECATION"
+  # Apple's GLUT lacks the freeglut-only functions the glut gem binds.
+  case "$ROOT" in
+    *\'*|*\"*|*\\*)
+      echo "The glTail checkout path must not contain quotes or backslashes: $ROOT" >&2
+      exit 1 ;;
+  esac
+  COMPAT_HEADER="${ROOT// /\\ }/vendor/glut-macos-compat.h"
+  GLUT_CFLAGS="${GL_CFLAGS} -include ${COMPAT_HEADER}"
+fi
+
+# Wire the CFLAGS into bundler so opengl, glu, glut all build. These end up
+# in .bundle/config as project-local settings. Bundler shell-splits these
+# values, so the flag list must be quoted to reach extconf as one argument
+# (unquoted, every flag after the first is silently dropped).
+bundle config set --local build.opengl "--with-cflags='${GL_CFLAGS}'"
+bundle config set --local build.glu    "--with-cflags='${GL_CFLAGS}'"
+bundle config set --local build.glut   "--with-cflags='${GLUT_CFLAGS}'"
 
 bundle install
 
