@@ -320,10 +320,15 @@ module GlTail
 
     def start
       if RUBY_PLATFORM =~ /darwin/
-        # Apple's GLUT chdirs to the executable's directory unless told not
-        # to, which breaks relative log/key paths. Also keep gl_tail's own
-        # command-line flags away from GLUT's argument parser.
-        glutInit([$0, '-useWorkingDir'])
+        # Apple's GLUT chdirs to the executable's directory during init, which
+        # breaks relative log/key paths, so restore the working directory.
+        # Don't pass -useWorkingDir instead: GLUT strips the options it
+        # consumes by shifting argv up to its NULL terminator, and the glut
+        # gem's argv has none, so that aborts the process. Passing only a
+        # program name also keeps gl_tail's own flags away from GLUT.
+        cwd = Dir.pwd
+        glutInit(['gl_tail'])
+        Dir.chdir(cwd)
       else
         glutInit()
       end
