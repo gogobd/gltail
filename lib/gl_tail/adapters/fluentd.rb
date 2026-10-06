@@ -16,8 +16,11 @@ module GlTail
         @config_hash = config
       end
 
+      # Fluentd parsers yield (nil, nil) for lines they can't parse (a
+      # malformed entry, or a line caught half-written while tailing). Skip
+      # those, like Adapters::Regex does, instead of handing nil to the mapper.
       def parse(line)
-        plugin.parse(line) { |_time, record| yield record }
+        plugin.parse(line) { |_time, record| yield record if record }
       end
 
       private
