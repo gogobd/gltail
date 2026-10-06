@@ -8,11 +8,29 @@ $DBG=0
 $VRB=1
 
 file = 'gl_tail.yaml'
+file_given = false
+stdin_parser = 'apache'
+stdin_name = nil
+
+# Options that take a value: pull them (and their value) out first.
+args = ARGV.dup
+ARGV.clear
+until args.empty?
+  arg = args.shift
+  case arg
+  when '--parser', '-P'
+    stdin_parser = args.shift or abort("#{arg} needs a parser name (see --parsers)")
+  when '--name', '-N'
+    stdin_name = args.shift or abort("#{arg} needs a name")
+  else
+    ARGV << arg
+  end
+end
 
 ARGV.each do |arg|
   case arg
   when '-help','--help','-h'
-    puts 'gl_tail [--help|-h] [--parsers|-p] [--verbose|-v] [--debug|-d] [--debug-ssh|-ds] [configfile]',
+    puts 'gl_tail [--help|-h] [--parsers|-p] [--verbose|-v] [--debug|-d] [--debug-ssh|-ds] [--stdin|-] [configfile]',
          '[--help|-h]        This help screen',
          '[--version]        Print version information',
          '[--new|-n]         Initialize config specified with default options',
@@ -21,8 +39,17 @@ ARGV.each do |arg|
          '[--quiet|-q]       Turn off runtime information',
          '[--debug|-d]       Turn on debugging',
          '[--debug-ssh|-ds]  Only debug SSH',
-         '[configfile]       The YAML config file you wish to load (default = config.yaml)'
+         '[--stdin|-]        Read log lines from stdin instead of the servers in the config',
+         '[--parser|-P NAME] Parser for --stdin (default: apache; see --parsers)',
+         '[--name|-N NAME]   Site name shown for --stdin (default: stdin)',
+         '[configfile]       The YAML config file you wish to load (default = gl_tail.yaml;',
+         '                   optional with --stdin, which then uses the built-in defaults)',
+         '',
+         'Example:',
+         '  ssh me@server docker logs --follow --tail 1 web | gl_tail --stdin --name web'
     exit
+  when '-stdin', '--stdin', '-'
+    @stdin = true
   when '-version', '--version'
     @print = :version
   when '-new', '--new', '-n'
@@ -38,6 +65,7 @@ ARGV.each do |arg|
   when '--options', '-o'
     @print = :options
   else
+    file_given = true
     if(File.exist?(arg) && File.file?(arg))
       file = arg
     else
@@ -67,6 +95,9 @@ if defined? @init_config
   puts "Example configuration installed in '#{file}'"
   puts 'Please edit it and change server and login information.'
   exit
+elsif defined?(@stdin) && !file_given
+  # No config file needed: use the shipped defaults for screen/layout.
+  file = File.expand_path('../dist/config.yaml', __dir__)
 elsif !File.exist?(file)
   puts 'Configuration file not found. Either supply the path to a config file as an argument to gl_tail,',
        'or create a new one with:',
@@ -105,7 +136,22 @@ if RUBY_PLATFORM.split('-',2).last != 'mswin32'
 	trap('USR2') { $DBG >= 2 ? $DBG = 0 : $DBG += 1; puts 'debug level toggled' }
 end
 
-config = GlTail::Config.parse_yaml(file)
+overrides = {}
+if defined? @stdin
+  # Replace the configured servers with a single source reading stdin. The
+  # rest of the config file (screen, columns, blocks) still applies.
+  name = stdin_name || 'stdin'
+  overrides['servers'] = {
+    name => {
+      'source' => 'stdin',
+      'host'   => name,
+      'parser' => stdin_parser,
+      'color'  => '0.2, 1.0, 0.2, 1.0',
+    }
+  }
+end
+
+config = GlTail::Config.parse_yaml(file, overrides)
 
 engine = GlTail::Engine.new(config)
 engine.start

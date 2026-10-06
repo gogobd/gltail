@@ -33,6 +33,7 @@ require 'gl_tail/config/yaml_parser'
 require 'gl_tail/sources/base'
 require 'gl_tail/sources/ssh'
 require 'gl_tail/sources/local'
+require 'gl_tail/sources/stdin'
 
 %w(version engine activity block item element parser resolver blob_store font_store).each {|f| require "gl_tail/#{f}" }
 

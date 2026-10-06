@@ -235,10 +235,12 @@ module GlTail
 
   class Config
     class << self
-      def parse_yaml(file)
+      # overrides: optional Hash merged over the top-level YAML keys, e.g.
+      # { 'servers' => {...} } to replace the configured sources.
+      def parse_yaml(file, overrides = {})
         require 'yaml'
 
-        YamlParser.new(file).apply(self.new)
+        YamlParser.new(file, overrides).apply(self.new)
       end
     end
 

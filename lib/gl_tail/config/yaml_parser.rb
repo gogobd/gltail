@@ -4,9 +4,9 @@ module GlTail
   class YamlParser
     attr_reader :yaml
 
-    def initialize(file)
+    def initialize(file, overrides = {})
       file  ||= 'config.yaml'
-      @yaml   = YAML.load_file(file)
+      @yaml   = YAML.load_file(file).merge(overrides)
     end
 
     def apply(config)
@@ -39,9 +39,12 @@ module GlTail
         name = server.shift
         data = server.shift
 
-        if data['source'] && data['source'].downcase == 'local'
+        case data['source'].to_s.downcase
+        when 'local'
           src = GlTail::Source::Local.new(@config)
-        else 
+        when 'stdin'
+          src = GlTail::Source::Stdin.new(@config)
+        else
           src = GlTail::Source::SSH.new(@config)
         end
         

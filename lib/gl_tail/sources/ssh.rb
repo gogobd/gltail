@@ -59,30 +59,25 @@ module GlTail
         @channels.each { |ch| ch.process }
       end
 
+      # SSH data arrives in arbitrary chunks. Only parse complete lines and
+      # keep a trailing partial line buffered until the rest arrives (this
+      # used to parse the fragment and then drop the remainder).
       def parse_line(data)
-        @buffer.split("\n").each() do |line|
-
-#          unless line.include? "\n"
-#            @buffer = "#{line}"
-#            next
-#          end
-
-#          line.gsub!(/\n\n/, "\n")
-#          line.gsub!(/\n\n/, "\n")
+        while (i = @buffer.index("\n"))
+          line = @buffer.slice!(0, i + 1).chomp
+          next if line.empty?
 
           puts "#{host}[#{user}]: #{line}" if $DBG > 0
 
           parser.parse(line)
         end
-
-        @buffer = '' if @buffer.include? "\n"
       end
 
       def do_tail( file, command )
         @session.open_channel do |channel|
           puts "Channel opened on #{@session.host}...\n" if($VRB > 0 || $DBG > 0)
 
-          @buffer = ''
+          @buffer = String.new
 #          channel.request_pty :want_reply => true
 
           channel.on_data do |ch, data|
