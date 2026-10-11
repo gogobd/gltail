@@ -13,12 +13,17 @@ module GlTail
       config_attribute :source, 'The type of Source'
       config_attribute :host, 'Host name of the logged site (used to ignore self-referrals)'
 
-      # Upper bound per frame, so a burst of backlog can't stall rendering.
-      MAX_BYTES_PER_FRAME = 256 * 1024
+      # Time per frame for parsing log lines, so a burst can't stall a frame;
+      # lines left over wait in the buffer for the next frame.
+      PARSE_BUDGET = 0.004 # seconds
+      # Stop reading from the pipe while this much is still waiting (the
+      # sender then waits too, instead of glTail buffering without limit).
+      MAX_BACKLOG  = 4 * 1024 * 1024
 
       def init
         @io = $stdin
-        @buffer = String.new
+        @buffer = String.new(encoding: Encoding::BINARY)
+        @pos = 0
         @eof = false
 
         if @io.tty?
@@ -28,29 +33,33 @@ module GlTail
       end
 
       def process
-        return if @eof
+        return if @eof && @buffer.empty?
 
-        read = 0
-        while read < MAX_BYTES_PER_FRAME
+        deadline = now + PARSE_BUDGET
+        loop do
+          # Parse complete lines already buffered; keep a trailing partial
+          # line until the rest of it arrives.
+          while (i = @buffer.byteindex("\n", @pos))
+            parse_line(@buffer.byteslice(@pos, i + 1 - @pos))
+            @pos = i + 1
+            return compact_buffer if now >= deadline
+          end
+          compact_buffer
+
+          break if @eof || @buffer.bytesize >= MAX_BACKLOG
+
           chunk = @io.read_nonblock(65536, exception: false)
-
           case chunk
           when :wait_readable
             break
           when nil
             @eof = true
             parse_line(@buffer) unless @buffer.empty?
-            @buffer = String.new
+            @buffer = String.new(encoding: Encoding::BINARY)
             puts 'stdin closed; no more log lines will arrive.' if $VRB > 0
             break
           else
-            read += chunk.bytesize
             @buffer << chunk
-            # Only hand complete lines to the parser; keep a trailing partial
-            # line in the buffer until the rest of it arrives.
-            while (i = @buffer.index("\n"))
-              parse_line(@buffer.slice!(0, i + 1))
-            end
           end
         end
       rescue IOError, Errno::EBADF
@@ -62,8 +71,18 @@ module GlTail
 
       private
 
+      def now
+        Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      end
+
+      def compact_buffer
+        return if @pos == 0
+        @buffer = @buffer.byteslice(@pos, @buffer.bytesize - @pos)
+        @pos = 0
+      end
+
       def parse_line(raw)
-        line = raw.chomp.force_encoding(Encoding::UTF_8).scrub
+        line = raw.dup.force_encoding(Encoding::UTF_8).chomp.scrub
         return if line.empty?
 
         puts "stdin: #{line}" if $DBG > 0

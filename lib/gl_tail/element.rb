@@ -340,22 +340,13 @@ class Element
           else 
             a.body.v = CP::Vec2.new(-350,0)
           end 
-          engine.space.add_body(a.body)
+          a.shape = CP::Shape::Circle.new(a.body, bs, CP::Vec2.new(0.0, 0.0))
+          a.shape.e = 0.1 # Elasticity
+          a.shape.u = 1   # Friction
 
-          # Collision shapes are what make physics expensive: every shape in
-          # the space is checked against its neighbours each step. Only blobs
-          # with a free collision slot (max_colliding_blobs) collide with
-          # other blobs. The rest are drawn and fall just the same, passing
-          # through other blobs; with bouncing on they still hit the walls.
-          collide = engine.screen.blob_collisions? && engine.collider_available?
-          if collide || engine.screen.bounce
-            a.shape = CP::Shape::Circle.new(a.body, bs, CP::Vec2.new(0.0, 0.0))
-            a.shape.e = 0.1 # Elasticity
-            a.shape.u = 1   # Friction
-            a.shape.group = 1 unless collide # same group = no blob/blob contacts
-            engine.space.add_shape(a.shape)
-            engine.collider_added(a) if collide
-          end
+          # The engine decides whether this blob collides with other blobs
+          # (see Engine#add_blob); it may change from frame to frame.
+          engine.add_blob(a)
         end
       end 
     end

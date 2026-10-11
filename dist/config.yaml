@@ -31,6 +31,8 @@ config:
     bounce: false
     # rate_unit: second        # show r/s instead of r/m (or start with --per-second)
     # Performance under heavy traffic:
+    # frame_budget: 90         # % of each frame all work may use; physics gets the
+    #                          # rest, random rotating blobs collide (same as --fast)
     # physics_rate: auto       # 1 = physics every frame; 2/3 = every 2nd/3rd frame;
     #                          # auto = only when busy (same as --fast)
     # max_colliding_blobs: 1500 # only this many blobs collide; the rest pass through (0 = all)

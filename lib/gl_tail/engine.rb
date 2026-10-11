@@ -44,9 +44,15 @@ module GlTail
 
       if @physics_frame >= every
         t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        if frame_budget?
+          rotate_colliders
+          fill_colliders
+        end
         @space.step(@physics_frame / 60.0)
         took = (Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0) * 1000.0
+        @physics_ms = took
         adapt_physics_rate(took / @physics_frame) if physics_auto?
+        adapt_collisions(took) if frame_budget?
         @physics_frame = 0
         @physics_lag = 0.0
       else
@@ -98,26 +104,152 @@ module GlTail
       @blobs_spawned += 1
     end
 
-    # Blobs currently colliding with other blobs (screen.max_colliding_blobs).
+    # ---- Which blobs collide with each other ------------------------------
+    #
+    # Every physics blob is in one of two lists: colliding (its shape takes
+    # part in blob-to-blob collisions) or passive (drawn and falling the
+    # same, but passing through other blobs; with bouncing on it still hits
+    # the walls). Collisions are what make physics expensive, so the number
+    # of colliding blobs is limited by max_colliding_blobs and, with
+    # frame_budget set, by how much time each frame has left for physics.
+    # In budget mode the colliding ones are random and rotate every frame.
+
+    ROTATE_FRACTION = 0.05 # share of colliding blobs swapped each frame
+    MIN_COLLIDERS   = 50
+    BUDGET_TARGET   = 0.7  # aim average physics time at this share of its budget
+
     def colliders
-      @colliders ||= 0
+      colliding_list.size
+    end
+
+    def colliding_list
+      @colliding ||= []
+    end
+
+    def passive_list
+      @passive ||= []
+    end
+
+    def collider_limit
+      limits = []
+      max = @config.screen.max_colliding_blobs.to_i
+      limits << max if max > 0
+      limits << @collide_limit.to_i if frame_budget?
+      limits.min
     end
 
     def collider_available?
-      max = @config.screen.max_colliding_blobs.to_i
-      max <= 0 || colliders < max
+      return false unless @config.screen.blob_collisions?
+      limit = collider_limit
+      limit.nil? || colliders < limit
     end
 
-    def collider_added(activity)
-      activity.collider = true
-      @colliders = colliders + 1
+    # Called by Element for each new physics blob (body and shape set up,
+    # neither added to the space yet).
+    def add_blob(activity)
+      @space.add_body(activity.body)
+      activity.shape_in_space = false
+      set_collider(activity, collider_available?)
     end
 
     def remove_blob(activity)
       @space.remove_body(activity.body)
-      return unless activity.shape
-      @space.remove_shape(activity.shape)
-      @colliders = colliders - 1 if activity.collider
+      @space.remove_shape(activity.shape) if activity.shape_in_space
+      activity.shape_in_space = false
+      list_remove(activity.collider ? colliding_list : passive_list, activity)
+    end
+
+    def set_collider(activity, on)
+      unless activity.blob_index.nil?
+        return if activity.collider == on
+        list_remove(activity.collider ? colliding_list : passive_list, activity)
+      end
+
+      in_space = on || @config.screen.bounce
+      if in_space && !activity.shape_in_space
+        @space.add_shape(activity.shape)
+        activity.shape_in_space = true
+      elsif !in_space && activity.shape_in_space
+        @space.remove_shape(activity.shape)
+        activity.shape_in_space = false
+      end
+      activity.shape.group = on ? 0 : 1 # same non-zero group = no contacts
+      activity.collider = on
+
+      list_add(on ? colliding_list : passive_list, activity)
+    end
+
+    def list_add(list, activity)
+      activity.blob_index = list.size
+      list << activity
+    end
+
+    # O(1): move the last element into the removed one's slot.
+    def list_remove(list, activity)
+      i = activity.blob_index
+      last = list.pop
+      if last && !last.equal?(activity)
+        list[i] = last
+        last.blob_index = i
+      end
+      activity.blob_index = nil
+    end
+
+    def frame_budget?
+      @config.screen.frame_budget.to_f > 0
+    end
+
+    def target_frame_ms
+      fps = @config.screen.wanted_fps.to_f
+      1000.0 / (fps > 0 ? fps : 60.0)
+    end
+
+    # Time left for physics this frame: frame_budget % of the frame, minus
+    # what drawing and log parsing have been taking.
+    def physics_budget_ms
+      [target_frame_ms * @config.screen.frame_budget.to_f / 100.0 - @other_ms.to_f, 1.0].max
+    end
+
+    # After each physics step: scale the number of colliding blobs so the
+    # next step fits the budget. Shrinks quickly, grows slowly, and only
+    # grows when the limit is actually what's holding blobs back.
+    def adapt_collisions(physics_ms)
+      @collide_limit ||= 1000.0
+      # Aim the average at 70% of the budget: the cost of a step varies from
+      # frame to frame, and the headroom keeps the slower ones within budget.
+      ratio = physics_budget_ms * BUDGET_TARGET / [physics_ms, 0.05].max
+      ratio = [[ratio, 0.7].max, 1.05].min
+      return if ratio > 1.0 && colliders < @collide_limit * 0.9
+
+      @collide_limit = [[@collide_limit * ratio, MIN_COLLIDERS].max, 100_000].min
+
+      # Over the new limit: demote random colliders now, at most 20% per frame.
+      excess = colliders - collider_limit.to_i
+      [excess, (colliders * 0.2).ceil].min.times do
+        set_collider(colliding_list[rand(colliding_list.size)], false)
+      end if excess > 0
+    end
+
+    # Swap a few random colliding blobs with random passive ones, so every
+    # blob gets its turn at colliding.
+    def rotate_colliders
+      return if passive_list.empty? || colliding_list.empty?
+      n = [(colliders * ROTATE_FRACTION).ceil, passive_list.size].min
+      n.times do
+        incoming = passive_list[rand(passive_list.size)]
+        outgoing = colliding_list[rand(colliding_list.size)]
+        set_collider(outgoing, false)
+        set_collider(incoming, true)
+      end
+    end
+
+    # Fill free collider slots from passive blobs (e.g. after the limit grew).
+    def fill_colliders
+      return unless @config.screen.blob_collisions?
+      free = collider_limit ? collider_limit - colliders : passive_list.size
+      [free, passive_list.size, (MIN_COLLIDERS * 2)].min.times do
+        set_collider(passive_list[rand(passive_list.size)], true)
+      end if free > 0
     end
 
     def stats
@@ -196,10 +328,15 @@ module GlTail
         printf("%d frames in %6.3f seconds = %6.3f FPS\n",
         @frames, seconds, $FPS) if $VRB > 0
         @t0, @frames = t, 0
-        puts "Elements[#{stats[0]}], Activities[#{stats[1]}], Colliding[#{colliders}], Blobs[#{BlobStore.used}/#{BlobStore.size}]" if $VRB > 0
+        puts "Elements[#{stats[0]}], Activities[#{stats[1]}], Colliding[#{colliders}#{frame_budget? ? " limit #{collider_limit}, physics #{'%.1f' % physics_budget_ms} ms budget" : ''}], Blobs[#{BlobStore.used}/#{BlobStore.size}]" if $VRB > 0
       end
 
       @render_time = (Time.new - @t)
+
+      # Non-physics work this frame, smoothed, for the physics budget.
+      other = @render_time * 1000.0 - @physics_ms.to_f + @process_ms.to_f
+      @other_ms = @other_ms ? @other_ms * 0.9 + other * 0.1 : other
+      @physics_ms = 0.0
     end
 
     def idle
@@ -222,7 +359,9 @@ module GlTail
       #    t = glutGet(GLUT_ELAPSED_TIME)
       glutPostRedisplay()
       glutSwapBuffers()
+      t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       do_process
+      @process_ms = (Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0) * 1000.0
       #    t = glutGet(GLUT_ELAPSED_TIME) - t
       #    t = 14 if t > 14
     end

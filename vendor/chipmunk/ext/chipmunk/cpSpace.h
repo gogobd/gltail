@@ -95,6 +95,11 @@ typedef struct cpSpace{
 	// List of active arbiters for the impulse solver.
 	CP_PRIVATE(cpArray *arbiters);
 	CP_PRIVATE(cpArray *pooledArbiters);
+
+	// glTail: shapes removed since the last step whose contacts still have to
+	// be dropped from contactSet. Done in one pass at the start of the next
+	// step instead of one full contactSet pass per removed shape.
+	CP_PRIVATE(cpArray *removedShapes);
 	
 	// Linked list ring of contact buffers.
 	// Head is the newest buffer, and each buffer points to a newer buffer.
@@ -159,6 +164,7 @@ cpBody *cpSpaceAddBody(cpSpace *space, cpBody *body);
 cpConstraint *cpSpaceAddConstraint(cpSpace *space, cpConstraint *constraint);
 
 void cpSpaceRemoveShape(cpSpace *space, cpShape *shape);
+void cpSpaceFlushRemovedShapes(cpSpace *space);
 void cpSpaceRemoveStaticShape(cpSpace *space, cpShape *shape);
 void cpSpaceRemoveBody(cpSpace *space, cpBody *body);
 void cpSpaceRemoveConstraint(cpSpace *space, cpConstraint *constraint);

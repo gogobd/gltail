@@ -48,8 +48,10 @@ rb_cpSpaceInitialize(VALUE self) {
 
   // These might as well be in one shared hash.
   rb_iv_set(self, "static_shapes", rb_ary_new());
-  rb_iv_set(self, "active_shapes", rb_ary_new());
-  rb_iv_set(self, "bodies", rb_ary_new());
+  // glTail: identity hashes, so removing one of thousands of shapes or
+  // bodies doesn't scan (and call == on) every entry like rb_ary_delete.
+  rb_iv_set(self, "active_shapes", rb_funcall(rb_hash_new(), rb_intern("compare_by_identity"), 0));
+  rb_iv_set(self, "bodies", rb_funcall(rb_hash_new(), rb_intern("compare_by_identity"), 0));
   rb_iv_set(self, "constraints", rb_ary_new());
   rb_iv_set(self, "blocks", rb_hash_new());
 
@@ -323,7 +325,7 @@ rb_cpSpaceAddPostStepCallback(int argc, VALUE *argv, VALUE self) {
 static VALUE
 rb_cpSpaceAddShape(VALUE self, VALUE shape) {
   cpSpaceAddShape(SPACE(self), SHAPE(shape));
-  rb_ary_push(rb_iv_get(self, "active_shapes"), shape);
+  rb_hash_aset(rb_iv_get(self, "active_shapes"), shape, Qtrue);
   return shape;
 }
 
@@ -337,7 +339,7 @@ rb_cpSpaceAddStaticShape(VALUE self, VALUE shape) {
 static VALUE
 rb_cpSpaceAddBody(VALUE self, VALUE body) {
   cpSpaceAddBody(SPACE(self), BODY(body));
-  rb_ary_push(rb_iv_get(self, "bodies"), body);
+  rb_hash_aset(rb_iv_get(self, "bodies"), body, Qtrue);
   return body;
 }
 
@@ -350,7 +352,7 @@ rb_cpSpaceAddConstraint(VALUE self, VALUE constraint) {
 
 static VALUE
 rb_cpSpaceRemoveShape(VALUE self, VALUE shape) {
-  VALUE ok = rb_ary_delete(rb_iv_get(self, "active_shapes"), shape);
+  VALUE ok = rb_hash_delete(rb_iv_get(self, "active_shapes"), shape);
   if(!(NIL_P(ok))) cpSpaceRemoveShape(SPACE(self), SHAPE(shape));
   return ok;
 }
@@ -364,7 +366,7 @@ rb_cpSpaceRemoveStaticShape(VALUE self, VALUE shape) {
 
 static VALUE
 rb_cpSpaceRemoveBody(VALUE self, VALUE body) {
-  VALUE ok = rb_ary_delete(rb_iv_get(self, "bodies"), body);
+  VALUE ok = rb_hash_delete(rb_iv_get(self, "bodies"), body);
   if(!(NIL_P(ok))) cpSpaceRemoveBody(SPACE(self), BODY(body));
   return ok;
 }

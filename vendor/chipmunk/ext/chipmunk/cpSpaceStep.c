@@ -290,6 +290,9 @@ cpSpaceStep(cpSpace *space, cpFloat dt)
 	if(!dt) return; // don't step if the timestep is 0!
 	cpFloat dt_inv = 1.0f/dt;
 
+	// glTail: first drop contacts of shapes removed since the last step.
+	cpSpaceFlushRemovedShapes(space);
+
 	cpArray *bodies = space->bodies;
 	cpArray *constraints = space->constraints;
 	

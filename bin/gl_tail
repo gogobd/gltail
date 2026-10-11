@@ -43,9 +43,9 @@ ARGV.each do |arg|
          '[--parser|-P NAME] Parser for --stdin (default: apache; see --parsers)',
          '[--name|-N NAME]   Site name shown for --stdin (default: stdin)',
          '[--per-second]     Show rates as requests per second (r/s) instead of r/m',
-         '[--fast]           Under heavy load, run physics every 2nd/3rd frame',
-         '                   (physics_rate: auto) and let at most 1500 blobs',
-         '                   collide with each other (max_colliding_blobs: 1500)',
+         '[--fast]           Keep frames smooth under heavy load: physics gets',
+         '                   what is left of 90% of each frame, and only as many',
+         '                   random, rotating blobs collide as fit (frame_budget: 90)',
          '[configfile]       The YAML config file you wish to load (default = gl_tail.yaml;',
          '                   optional with --stdin, which then uses the built-in defaults)',
          '',
@@ -166,8 +166,7 @@ end
 config = GlTail::Config.parse_yaml(file, overrides)
 
 if defined? @fast
-  config.screen.physics_rate = 'auto'
-  config.screen.max_colliding_blobs = 1500 if config.screen.max_colliding_blobs.to_i <= 0
+  config.screen.frame_budget = 90 if config.screen.frame_budget.to_f <= 0
 end
 
 if defined? @per_second

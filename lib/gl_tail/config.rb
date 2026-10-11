@@ -182,6 +182,8 @@ module GlTail
 
     config_attribute :max_colliding_blobs, 'Maximum number of blobs that collide with each other (default 0 = all). Blobs beyond it are still drawn and fall normally but pass through other blobs.'
 
+    config_attribute :frame_budget, 'Percentage of each frame (at wanted_fps, or 60) that drawing, log parsing and physics together may use; physics gets the rest, and the number of colliding blobs (picked at random, rotating) adapts to fit. 0/unset = off. --fast sets 90.'
+
     def blob_collisions?
       !(blob_collisions == false || blob_collisions.to_s.downcase == 'false')
     end

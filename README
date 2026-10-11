@@ -34,24 +34,20 @@ Piping logs in (like logstalgia):
 
 Performance:
   Every request becomes several physics blobs, and blobs colliding with each
-  other gets expensive fast (about 34 ms per frame for 4000 blobs).
+  other gets expensive fast; under a request flood they pile up in the middle.
 
-  --fast (or physics_rate: auto in the config: section) keeps every blob and
-  every bounce, but when the physics gets expensive it runs it every 2nd or
-  3rd frame instead of every frame, drawing blobs smoothly in between. This
-  roughly halves the physics cost; bounces are a few pixels less exact.
-  physics_rate: 2 or 3 forces a fixed rate.
+  --fast (frame_budget: 90 in the config: section) keeps frames smooth: all
+  work per frame may use 90% of the frame time (at wanted_fps, or 60 fps).
+  Drawing and reading log lines go first; physics gets what's left, and only
+  as many blobs collide with each other as fit in that time. Which blobs
+  collide is random and changes every frame, so every blob gets its turn;
+  the rest are drawn and fall normally but pass through other blobs. Log
+  lines are parsed for at most 4 ms per frame; a burst is spread over the
+  following frames instead of freezing one.
 
-  --fast also lets at most 1500 blobs collide with each other at a time
-  (max_colliding_blobs: N in the config). Every blob is still drawn and
-  falls normally; blobs beyond the limit pass through the others. Without a
-  limit, a flood of requests can pile up thousands of colliding blobs in the
-  middle of the screen, and the more pile up, the slower they drain.
-
-  If that's not enough: blob_collisions: false stops blobs colliding with
-  each other (near-zero physics cost; 'c' toggles it while running), and
-  max_blobs: N caps the blobs in flight (requests over the cap are still
-  counted in the columns).
+  Other knobs: max_colliding_blobs: N (a fixed limit), physics_rate: 2 or 3
+  (physics every 2nd/3rd frame), blob_collisions: false (no blob-to-blob
+  collisions at all; 'c' toggles it while running).
 
   You can also press 'f' while running to toggle the attempted frames per second. Or 'b'
   to change default blob type, and space to toggle bouncing.
@@ -95,7 +91,7 @@ Installation instructions (Windows):
 
 Applying the patches to the original glTail:
   Starting from a fresh clone of https://github.com/Fudge/gltail, with the
-  twelve .patch files in a folder next to it called gltail-patches:
+  thirteen .patch files in a folder next to it called gltail-patches:
 
     git clone https://github.com/Fudge/gltail.git
     cd gltail
@@ -111,4 +107,5 @@ Applying the patches to the original glTail:
     git am ../gltail-patches/0010-Report-unknown-command-line-options-instead-of-treat.patch
     git am ../gltail-patches/0011-README-explain-how-to-apply-.patch-files-with-git-am.patch
     git am ../gltail-patches/0012-Cap-the-number-of-blobs-that-collide-with-each-other.patch
+    git am ../gltail-patches/0013-Keep-frames-within-a-time-budget-under-heavy-traffic.patch
     bin/setup

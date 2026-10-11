@@ -20,6 +20,7 @@
  */
  
 #include <stdlib.h>
+#include <stdint.h>
 //#include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -134,6 +135,7 @@ cpSpaceInit(cpSpace *space)
 	
 	space->arbiters = cpArrayNew(0);
 	space->pooledArbiters = cpArrayNew(0);
+	space->removedShapes = cpArrayNew(0);
 	
 	space->contactBuffersHead = NULL;
 	space->contactSet = cpHashSetNew(0, (cpHashSetEqlFunc)contactSetEql, (cpHashSetTransFunc)contactSetTrans);
@@ -173,6 +175,7 @@ cpSpaceDestroy(cpSpace *space)
 	
 	cpArrayFree(space->arbiters);
 	cpArrayFree(space->pooledArbiters);
+	cpArrayFree(space->removedShapes);
 	
 	if(space->allocatedBuffers){
 		cpArrayEach(space->allocatedBuffers, freeWrap, NULL);
@@ -399,9 +402,51 @@ cpSpaceRemoveShape(cpSpace *space, cpShape *shape)
 	
 	cpBodyRemoveShape(body, shape);
 	
-	removalContext context = {space, shape};
-	cpHashSetFilter(space->contactSet, (cpHashSetFilterFunc)contactSetFilterRemovedShape, &context);
+	// glTail: defer dropping this shape's contacts (see cpSpaceFlushRemovedShapes).
+	cpArrayPush(space->removedShapes, shape);
 	cpSpaceHashRemove(space->activeShapes, shape, shape->hashid);
+}
+
+static int
+comparePointers(const void *a, const void *b)
+{
+	uintptr_t x = (uintptr_t)*(void * const *)a, y = (uintptr_t)*(void * const *)b;
+	return (x > y) - (x < y);
+}
+
+static cpBool
+isRemovedShape(cpArray *sorted, cpShape *shape)
+{
+	return bsearch(&shape, sorted->arr, sorted->num, sizeof(void *), comparePointers) != NULL;
+}
+
+static cpBool
+contactSetFilterRemovedShapes(cpArbiter *arb, cpSpace *space)
+{
+	// Pointer comparisons only: a removed shape may already have been freed.
+	if(isRemovedShape(space->removedShapes, arb->a) || isRemovedShape(space->removedShapes, arb->b)){
+		if(arb->state != cpArbiterStateCached){
+			arb->handler->separate(arb, space, arb->handler->data);
+		}
+		
+		cpArrayPush(space->pooledArbiters, arb);
+		return cpFalse;
+	}
+	
+	return cpTrue;
+}
+
+// glTail: drop the contacts of all shapes removed since the last step, in a
+// single pass over contactSet. Called at the very start of cpSpaceStep.
+void
+cpSpaceFlushRemovedShapes(cpSpace *space)
+{
+	cpArray *removed = space->removedShapes;
+	if(removed->num == 0) return;
+	
+	qsort(removed->arr, removed->num, sizeof(void *), comparePointers);
+	cpHashSetFilter(space->contactSet, (cpHashSetFilterFunc)contactSetFilterRemovedShapes, space);
+	removed->num = 0;
 }
 
 void
