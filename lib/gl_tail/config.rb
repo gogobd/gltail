@@ -180,6 +180,8 @@ module GlTail
       %w[second seconds s sec].include?(rate_unit.to_s.downcase)
     end
 
+    config_attribute :max_colliding_blobs, 'Maximum number of blobs that collide with each other (default 0 = all). Blobs beyond it are still drawn and fall normally but pass through other blobs.'
+
     def blob_collisions?
       !(blob_collisions == false || blob_collisions.to_s.downcase == 'false')
     end

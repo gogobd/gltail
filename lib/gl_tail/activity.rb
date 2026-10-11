@@ -6,7 +6,7 @@
 
 class Activity
   attr_accessor :x, :y, :z, :wx, :wy, :wz, :xi, :yi, :zi
-  attr_accessor :message, :color, :size, :type, :body, :shape, :gl_list
+  attr_accessor :message, :color, :size, :type, :body, :shape, :gl_list, :collider
 
   def initialize(message, x, y, z, color, size, type = 0)
     @shape = @body = nil

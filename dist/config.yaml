@@ -33,6 +33,7 @@ config:
     # Performance under heavy traffic:
     # physics_rate: auto       # 1 = physics every frame; 2/3 = every 2nd/3rd frame;
     #                          # auto = only when busy (same as --fast)
+    # max_colliding_blobs: 1500 # only this many blobs collide; the rest pass through (0 = all)
     # blob_collisions: false   # blobs don't collide with each other; much cheaper
     # max_blobs: 2000          # cap on blobs in flight; 0 = unlimited
     left_column:

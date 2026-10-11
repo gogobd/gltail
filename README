@@ -42,6 +42,12 @@ Performance:
   roughly halves the physics cost; bounces are a few pixels less exact.
   physics_rate: 2 or 3 forces a fixed rate.
 
+  --fast also lets at most 1500 blobs collide with each other at a time
+  (max_colliding_blobs: N in the config). Every blob is still drawn and
+  falls normally; blobs beyond the limit pass through the others. Without a
+  limit, a flood of requests can pile up thousands of colliding blobs in the
+  middle of the screen, and the more pile up, the slower they drain.
+
   If that's not enough: blob_collisions: false stops blobs colliding with
   each other (near-zero physics cost; 'c' toggles it while running), and
   max_blobs: N caps the blobs in flight (requests over the cap are still
@@ -89,7 +95,7 @@ Installation instructions (Windows):
 
 Applying the patches to the original glTail:
   Starting from a fresh clone of https://github.com/Fudge/gltail, with the
-  eleven .patch files in a folder next to it called gltail-patches:
+  twelve .patch files in a folder next to it called gltail-patches:
 
     git clone https://github.com/Fudge/gltail.git
     cd gltail
@@ -104,4 +110,5 @@ Applying the patches to the original glTail:
     git am ../gltail-patches/0009-Add-per-second-rate_unit-second-to-show-rates-as-r-s.patch
     git am ../gltail-patches/0010-Report-unknown-command-line-options-instead-of-treat.patch
     git am ../gltail-patches/0011-README-explain-how-to-apply-.patch-files-with-git-am.patch
+    git am ../gltail-patches/0012-Cap-the-number-of-blobs-that-collide-with-each-other.patch
     bin/setup

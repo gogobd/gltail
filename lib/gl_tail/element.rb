@@ -113,8 +113,7 @@ class Element
     for a in @activities do 
       if a.x > 1.0 || a.x < -1.0 || a.y < cutoff
         if a.body 
-          engine.space.remove_body(a.body)
-          engine.space.remove_shape(a.shape) if a.shape
+          engine.remove_blob(a)
           a.free_vertex_lists
         end 
         @delete <<  a
@@ -343,16 +342,19 @@ class Element
           end 
           engine.space.add_body(a.body)
 
-          # Collision shapes are what make physics expensive. Without
-          # blob-to-blob collisions, a blob only needs a shape to bounce off
-          # the walls; otherwise it's a plain body that just falls.
-          collide = engine.screen.blob_collisions?
+          # Collision shapes are what make physics expensive: every shape in
+          # the space is checked against its neighbours each step. Only blobs
+          # with a free collision slot (max_colliding_blobs) collide with
+          # other blobs. The rest are drawn and fall just the same, passing
+          # through other blobs; with bouncing on they still hit the walls.
+          collide = engine.screen.blob_collisions? && engine.collider_available?
           if collide || engine.screen.bounce
             a.shape = CP::Shape::Circle.new(a.body, bs, CP::Vec2.new(0.0, 0.0))
             a.shape.e = 0.1 # Elasticity
             a.shape.u = 1   # Friction
             a.shape.group = 1 unless collide # same group = no blob/blob contacts
             engine.space.add_shape(a.shape)
+            engine.collider_added(a) if collide
           end
         end
       end 
@@ -362,8 +364,7 @@ class Element
     for a in @activities do
       if a.body
         if a.x > 1.0 || a.x < -1.0 || a.y < -(engine.screen.aspect*1.5)
-          engine.space.remove_body(a.body)
-          engine.space.remove_shape(a.shape) if a.shape
+          engine.remove_blob(a)
           @delete << a
           a.free_vertex_lists
         else 

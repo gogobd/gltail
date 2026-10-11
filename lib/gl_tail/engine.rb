@@ -98,6 +98,28 @@ module GlTail
       @blobs_spawned += 1
     end
 
+    # Blobs currently colliding with other blobs (screen.max_colliding_blobs).
+    def colliders
+      @colliders ||= 0
+    end
+
+    def collider_available?
+      max = @config.screen.max_colliding_blobs.to_i
+      max <= 0 || colliders < max
+    end
+
+    def collider_added(activity)
+      activity.collider = true
+      @colliders = colliders + 1
+    end
+
+    def remove_blob(activity)
+      @space.remove_body(activity.body)
+      return unless activity.shape
+      @space.remove_shape(activity.shape)
+      @colliders = colliders - 1 if activity.collider
+    end
+
     def stats
       @stats
     end
@@ -174,7 +196,7 @@ module GlTail
         printf("%d frames in %6.3f seconds = %6.3f FPS\n",
         @frames, seconds, $FPS) if $VRB > 0
         @t0, @frames = t, 0
-        puts "Elements[#{stats[0]}], Activities[#{stats[1]}], Blobs[#{BlobStore.used}/#{BlobStore.size}]" if $VRB > 0
+        puts "Elements[#{stats[0]}], Activities[#{stats[1]}], Colliding[#{colliders}], Blobs[#{BlobStore.used}/#{BlobStore.size}]" if $VRB > 0
       end
 
       @render_time = (Time.new - @t)
