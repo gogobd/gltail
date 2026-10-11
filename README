@@ -38,7 +38,8 @@ Performance:
 
   --fast (frame_budget: 90 in the config: section) keeps frames smooth: all
   work per frame may use 90% of the frame time (at wanted_fps, or 60 fps).
-  Drawing and reading log lines go first; physics gets what's left, and only
+  Drawing and reading log lines go first; physics gets what's left (but at
+  least 40% of the frame), and only
   as many blobs collide with each other as fit in that time. Which blobs
   collide is random and changes every frame, so every blob gets its turn;
   the rest are drawn and fall normally but pass through other blobs. Log
@@ -91,7 +92,7 @@ Installation instructions (Windows):
 
 Applying the patches to the original glTail:
   Starting from a fresh clone of https://github.com/Fudge/gltail, with the
-  thirteen .patch files in a folder next to it called gltail-patches:
+  fourteen .patch files in a folder next to it called gltail-patches:
 
     git clone https://github.com/Fudge/gltail.git
     cd gltail
@@ -108,4 +109,5 @@ Applying the patches to the original glTail:
     git am ../gltail-patches/0011-README-explain-how-to-apply-.patch-files-with-git-am.patch
     git am ../gltail-patches/0012-Cap-the-number-of-blobs-that-collide-with-each-other.patch
     git am ../gltail-patches/0013-Keep-frames-within-a-time-budget-under-heavy-traffic.patch
+    git am ../gltail-patches/0014-Give-physics-at-least-40-of-each-frame-in-budget-mod.patch
     bin/setup

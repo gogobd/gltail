@@ -117,6 +117,7 @@ module GlTail
     ROTATE_FRACTION = 0.05 # share of colliding blobs swapped each frame
     MIN_COLLIDERS   = 50
     BUDGET_TARGET   = 0.7  # aim average physics time at this share of its budget
+    PHYSICS_MIN_SHARE = 0.4 # physics always gets at least this share of a frame
 
     def colliders
       colliding_list.size
@@ -205,9 +206,15 @@ module GlTail
     end
 
     # Time left for physics this frame: frame_budget % of the frame, minus
-    # what drawing and log parsing have been taking.
+    # what drawing and log parsing have been taking, but never less than
+    # PHYSICS_MIN_SHARE of the frame. Drawing thousands of blobs (and, on
+    # macOS, waiting for the display inside the drawing calls) can fill the
+    # whole frame by itself; starving physics then wouldn't make frames any
+    # faster, it would only stop blobs from colliding.
     def physics_budget_ms
-      [target_frame_ms * @config.screen.frame_budget.to_f / 100.0 - @other_ms.to_f, 1.0].max
+      frame = target_frame_ms
+      [frame * @config.screen.frame_budget.to_f / 100.0 - @other_ms.to_f,
+       frame * PHYSICS_MIN_SHARE].max
     end
 
     # After each physics step: scale the number of colliding blobs so the
