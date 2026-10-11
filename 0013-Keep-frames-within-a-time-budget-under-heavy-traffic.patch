@@ -1,0 +1,691 @@
+From f3c655c21de3f63c173845a8baf8c3a9f9a184f6 Mon Sep 17 00:00:00 2001
+From: gogo <gogo@bluedynamics.com>
+Date: Sun, 11 Oct 2026 22:36:09 +0200
+Subject: [PATCH] Keep frames within a time budget under heavy traffic
+
+frame_budget: P (set to 90 by --fast) lets drawing, log parsing and
+physics together use P% of each frame. Physics gets what is left; the
+number of blobs that collide with each other adapts after every step to
+fit (aiming at 70% of the physics budget for headroom). Which blobs
+collide is random: 5% of them swap with passive blobs every frame, so
+every blob gets its turn. Physics runs every frame in this mode, so no
+frame is heavier than the others.
+
+Also removes two causes of chokes:
+
+- chipmunk: removing a shape scanned the whole contact set, per shape,
+  and the Ruby wrapper scanned all bodies/shapes (calling == on each)
+  per removal. Contacts of removed shapes are now dropped in one pass at
+  the start of the next step, and the wrapper keeps identity hashes.
+  Simulated at 3000 blobs/s with everything colliding: 88 -> 46 ms/frame.
+- stdin: a burst of input was parsed in a single frame (100k lines with
+  a 30 us parser: ~0.9 s frames). Parsing now stops after 4 ms per frame
+  and continues next frame; reading pauses at a 4 MB backlog.
+
+Requires bin/setup to rebuild the vendored chipmunk.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013kYwHzrj5ef427USqzf3UF
+---
+ CLAUDE.md                                  |   2 +
+ README                                     |  31 ++--
+ bin/gl_tail                                |   9 +-
+ dist/config.yaml                           |   2 +
+ lib/gl_tail/activity.rb                    |   2 +-
+ lib/gl_tail/config.rb                      |   2 +
+ lib/gl_tail/element.rb                     |  23 +--
+ lib/gl_tail/engine.rb                      | 161 +++++++++++++++++++--
+ lib/gl_tail/sources/stdin.rb               |  49 +++++--
+ vendor/chipmunk/ext/chipmunk/cpSpace.c     |  49 ++++++-
+ vendor/chipmunk/ext/chipmunk/cpSpace.h     |   6 +
+ vendor/chipmunk/ext/chipmunk/cpSpaceStep.c |   3 +
+ vendor/chipmunk/ext/chipmunk/rb_cpSpace.c  |  14 +-
+ 13 files changed, 280 insertions(+), 73 deletions(-)
+
+diff --git a/CLAUDE.md b/CLAUDE.md
+index 247c2d6..d735abc 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -22,6 +22,8 @@ There is no real test suite — `test/test_gl_tail.rb` is empty.
+ 
+ Runtime keys while the visualizer is running: `f` toggles target FPS, `b` cycles default blob type, `space` toggles bouncing, `c` toggles blob-to-blob collisions, `shift+f` toggles fullscreen.
+ 
++Frame budget (`frame_budget: P`, set to 90 by `--fast`): every physics blob is in `Engine#colliding_list` or `#passive_list` (swap-remove, index on `Activity#blob_index`); passive shapes are out of the space (or group 1 with bouncing on). Before each step 5% of colliders swap with random passive blobs; after it `adapt_collisions` scales the collider limit so physics (rotation + step) averages 70% of `P% × frame − other work` (draw minus physics, plus `do_process`, smoothed). Elements create body+shape and call `Engine#add_blob`/`#remove_blob` only. Vendored chipmunk is patched so removing shapes doesn't scan contactSet per shape (`cpSpaceFlushRemovedShapes`, one pass at the start of `cpSpaceStep`; pointer compares only, removed shapes may already be freed) and the Ruby keep-alive lists for bodies/active shapes are identity hashes. `Source::Stdin` parses for at most 4 ms per call and stops reading at a 4 MB backlog.
++
+ Performance knobs (`config:` section): `physics_rate: N|auto` steps chipmunk every Nth frame with dt N/60 (simulated time per drawn frame is unchanged) and `Activity#render` extrapolates body positions by `Engine#physics_lag`; `auto` (also `--fast`) adapts N in 1..3 against a ~4 ms/frame physics budget. Measured steady state: every 2nd frame ≈ half the physics cost, path deviation ≤ ~2 px. `blob_collisions: false` puts blobs in one chipmunk group (no blob/blob contacts) and, while bouncing is off, skips the collision shape entirely — measured ~34 ms → ~0.1 ms physics per frame at 4000 blobs. `max_blobs: N` caps blobs in flight, using the previous frame's drawn-activity count (`Engine#blob_budget_left?`), so it can't drift; capped requests are still counted. `SIGUSR2` toggles debug level.
+ 
+ ## Runtime dependencies & modernization notes
+diff --git a/README b/README
+index 27ed5ac..493f95a 100644
+--- a/README
++++ b/README
+@@ -34,24 +34,20 @@ Piping logs in (like logstalgia):
+ 
+ Performance:
+   Every request becomes several physics blobs, and blobs colliding with each
+-  other gets expensive fast (about 34 ms per frame for 4000 blobs).
++  other gets expensive fast; under a request flood they pile up in the middle.
+ 
+-  --fast (or physics_rate: auto in the config: section) keeps every blob and
+-  every bounce, but when the physics gets expensive it runs it every 2nd or
+-  3rd frame instead of every frame, drawing blobs smoothly in between. This
+-  roughly halves the physics cost; bounces are a few pixels less exact.
+-  physics_rate: 2 or 3 forces a fixed rate.
++  --fast (frame_budget: 90 in the config: section) keeps frames smooth: all
++  work per frame may use 90% of the frame time (at wanted_fps, or 60 fps).
++  Drawing and reading log lines go first; physics gets what's left, and only
++  as many blobs collide with each other as fit in that time. Which blobs
++  collide is random and changes every frame, so every blob gets its turn;
++  the rest are drawn and fall normally but pass through other blobs. Log
++  lines are parsed for at most 4 ms per frame; a burst is spread over the
++  following frames instead of freezing one.
+ 
+-  --fast also lets at most 1500 blobs collide with each other at a time
+-  (max_colliding_blobs: N in the config). Every blob is still drawn and
+-  falls normally; blobs beyond the limit pass through the others. Without a
+-  limit, a flood of requests can pile up thousands of colliding blobs in the
+-  middle of the screen, and the more pile up, the slower they drain.
+-
+-  If that's not enough: blob_collisions: false stops blobs colliding with
+-  each other (near-zero physics cost; 'c' toggles it while running), and
+-  max_blobs: N caps the blobs in flight (requests over the cap are still
+-  counted in the columns).
++  Other knobs: max_colliding_blobs: N (a fixed limit), physics_rate: 2 or 3
++  (physics every 2nd/3rd frame), blob_collisions: false (no blob-to-blob
++  collisions at all; 'c' toggles it while running).
+ 
+   You can also press 'f' while running to toggle the attempted frames per second. Or 'b'
+   to change default blob type, and space to toggle bouncing.
+@@ -95,7 +91,7 @@ Installation instructions (Windows):
+ 
+ Applying the patches to the original glTail:
+   Starting from a fresh clone of https://github.com/Fudge/gltail, with the
+-  twelve .patch files in a folder next to it called gltail-patches:
++  thirteen .patch files in a folder next to it called gltail-patches:
+ 
+     git clone https://github.com/Fudge/gltail.git
+     cd gltail
+@@ -111,4 +107,5 @@ Applying the patches to the original glTail:
+     git am ../gltail-patches/0010-Report-unknown-command-line-options-instead-of-treat.patch
+     git am ../gltail-patches/0011-README-explain-how-to-apply-.patch-files-with-git-am.patch
+     git am ../gltail-patches/0012-Cap-the-number-of-blobs-that-collide-with-each-other.patch
++    git am ../gltail-patches/0013-Keep-frames-within-a-time-budget-under-heavy-traffic.patch
+     bin/setup
+diff --git a/bin/gl_tail b/bin/gl_tail
+index 53d63e1..c0b20b6 100755
+--- a/bin/gl_tail
++++ b/bin/gl_tail
+@@ -43,9 +43,9 @@ ARGV.each do |arg|
+          '[--parser|-P NAME] Parser for --stdin (default: apache; see --parsers)',
+          '[--name|-N NAME]   Site name shown for --stdin (default: stdin)',
+          '[--per-second]     Show rates as requests per second (r/s) instead of r/m',
+-         '[--fast]           Under heavy load, run physics every 2nd/3rd frame',
+-         '                   (physics_rate: auto) and let at most 1500 blobs',
+-         '                   collide with each other (max_colliding_blobs: 1500)',
++         '[--fast]           Keep frames smooth under heavy load: physics gets',
++         '                   what is left of 90% of each frame, and only as many',
++         '                   random, rotating blobs collide as fit (frame_budget: 90)',
+          '[configfile]       The YAML config file you wish to load (default = gl_tail.yaml;',
+          '                   optional with --stdin, which then uses the built-in defaults)',
+          '',
+@@ -166,8 +166,7 @@ end
+ config = GlTail::Config.parse_yaml(file, overrides)
+ 
+ if defined? @fast
+-  config.screen.physics_rate = 'auto'
+-  config.screen.max_colliding_blobs = 1500 if config.screen.max_colliding_blobs.to_i <= 0
++  config.screen.frame_budget = 90 if config.screen.frame_budget.to_f <= 0
+ end
+ 
+ if defined? @per_second
+diff --git a/dist/config.yaml b/dist/config.yaml
+index c590cae..a0a7fa8 100644
+--- a/dist/config.yaml
++++ b/dist/config.yaml
+@@ -31,6 +31,8 @@ config:
+     bounce: false
+     # rate_unit: second        # show r/s instead of r/m (or start with --per-second)
+     # Performance under heavy traffic:
++    # frame_budget: 90         # % of each frame all work may use; physics gets the
++    #                          # rest, random rotating blobs collide (same as --fast)
+     # physics_rate: auto       # 1 = physics every frame; 2/3 = every 2nd/3rd frame;
+     #                          # auto = only when busy (same as --fast)
+     # max_colliding_blobs: 1500 # only this many blobs collide; the rest pass through (0 = all)
+diff --git a/lib/gl_tail/activity.rb b/lib/gl_tail/activity.rb
+index 4abb7dd..cc40db3 100644
+--- a/lib/gl_tail/activity.rb
++++ b/lib/gl_tail/activity.rb
+@@ -6,7 +6,7 @@
+ 
+ class Activity
+   attr_accessor :x, :y, :z, :wx, :wy, :wz, :xi, :yi, :zi
+-  attr_accessor :message, :color, :size, :type, :body, :shape, :gl_list, :collider
++  attr_accessor :message, :color, :size, :type, :body, :shape, :gl_list, :collider, :blob_index, :shape_in_space
+ 
+   def initialize(message, x, y, z, color, size, type = 0)
+     @shape = @body = nil
+diff --git a/lib/gl_tail/config.rb b/lib/gl_tail/config.rb
+index fb9ecda..48b27e3 100644
+--- a/lib/gl_tail/config.rb
++++ b/lib/gl_tail/config.rb
+@@ -182,6 +182,8 @@ module GlTail
+ 
+     config_attribute :max_colliding_blobs, 'Maximum number of blobs that collide with each other (default 0 = all). Blobs beyond it are still drawn and fall normally but pass through other blobs.'
+ 
++    config_attribute :frame_budget, 'Percentage of each frame (at wanted_fps, or 60) that drawing, log parsing and physics together may use; physics gets the rest, and the number of colliding blobs (picked at random, rotating) adapts to fit. 0/unset = off. --fast sets 90.'
++
+     def blob_collisions?
+       !(blob_collisions == false || blob_collisions.to_s.downcase == 'false')
+     end
+diff --git a/lib/gl_tail/element.rb b/lib/gl_tail/element.rb
+index 6333422..0ca125b 100644
+--- a/lib/gl_tail/element.rb
++++ b/lib/gl_tail/element.rb
+@@ -340,22 +340,13 @@ class Element
+           else 
+             a.body.v = CP::Vec2.new(-350,0)
+           end 
+-          engine.space.add_body(a.body)
+-
+-          # Collision shapes are what make physics expensive: every shape in
+-          # the space is checked against its neighbours each step. Only blobs
+-          # with a free collision slot (max_colliding_blobs) collide with
+-          # other blobs. The rest are drawn and fall just the same, passing
+-          # through other blobs; with bouncing on they still hit the walls.
+-          collide = engine.screen.blob_collisions? && engine.collider_available?
+-          if collide || engine.screen.bounce
+-            a.shape = CP::Shape::Circle.new(a.body, bs, CP::Vec2.new(0.0, 0.0))
+-            a.shape.e = 0.1 # Elasticity
+-            a.shape.u = 1   # Friction
+-            a.shape.group = 1 unless collide # same group = no blob/blob contacts
+-            engine.space.add_shape(a.shape)
+-            engine.collider_added(a) if collide
+-          end
++          a.shape = CP::Shape::Circle.new(a.body, bs, CP::Vec2.new(0.0, 0.0))
++          a.shape.e = 0.1 # Elasticity
++          a.shape.u = 1   # Friction
++
++          # The engine decides whether this blob collides with other blobs
++          # (see Engine#add_blob); it may change from frame to frame.
++          engine.add_blob(a)
+         end
+       end 
+     end
+diff --git a/lib/gl_tail/engine.rb b/lib/gl_tail/engine.rb
+index 5a3fce7..b2adb6c 100644
+--- a/lib/gl_tail/engine.rb
++++ b/lib/gl_tail/engine.rb
+@@ -44,9 +44,15 @@ module GlTail
+ 
+       if @physics_frame >= every
+         t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
++        if frame_budget?
++          rotate_colliders
++          fill_colliders
++        end
+         @space.step(@physics_frame / 60.0)
+         took = (Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0) * 1000.0
++        @physics_ms = took
+         adapt_physics_rate(took / @physics_frame) if physics_auto?
++        adapt_collisions(took) if frame_budget?
+         @physics_frame = 0
+         @physics_lag = 0.0
+       else
+@@ -98,26 +104,152 @@ module GlTail
+       @blobs_spawned += 1
+     end
+ 
+-    # Blobs currently colliding with other blobs (screen.max_colliding_blobs).
++    # ---- Which blobs collide with each other ------------------------------
++    #
++    # Every physics blob is in one of two lists: colliding (its shape takes
++    # part in blob-to-blob collisions) or passive (drawn and falling the
++    # same, but passing through other blobs; with bouncing on it still hits
++    # the walls). Collisions are what make physics expensive, so the number
++    # of colliding blobs is limited by max_colliding_blobs and, with
++    # frame_budget set, by how much time each frame has left for physics.
++    # In budget mode the colliding ones are random and rotate every frame.
++
++    ROTATE_FRACTION = 0.05 # share of colliding blobs swapped each frame
++    MIN_COLLIDERS   = 50
++    BUDGET_TARGET   = 0.7  # aim average physics time at this share of its budget
++
+     def colliders
+-      @colliders ||= 0
++      colliding_list.size
+     end
+ 
+-    def collider_available?
++    def colliding_list
++      @colliding ||= []
++    end
++
++    def passive_list
++      @passive ||= []
++    end
++
++    def collider_limit
++      limits = []
+       max = @config.screen.max_colliding_blobs.to_i
+-      max <= 0 || colliders < max
++      limits << max if max > 0
++      limits << @collide_limit.to_i if frame_budget?
++      limits.min
++    end
++
++    def collider_available?
++      return false unless @config.screen.blob_collisions?
++      limit = collider_limit
++      limit.nil? || colliders < limit
+     end
+ 
+-    def collider_added(activity)
+-      activity.collider = true
+-      @colliders = colliders + 1
++    # Called by Element for each new physics blob (body and shape set up,
++    # neither added to the space yet).
++    def add_blob(activity)
++      @space.add_body(activity.body)
++      activity.shape_in_space = false
++      set_collider(activity, collider_available?)
+     end
+ 
+     def remove_blob(activity)
+       @space.remove_body(activity.body)
+-      return unless activity.shape
+-      @space.remove_shape(activity.shape)
+-      @colliders = colliders - 1 if activity.collider
++      @space.remove_shape(activity.shape) if activity.shape_in_space
++      activity.shape_in_space = false
++      list_remove(activity.collider ? colliding_list : passive_list, activity)
++    end
++
++    def set_collider(activity, on)
++      unless activity.blob_index.nil?
++        return if activity.collider == on
++        list_remove(activity.collider ? colliding_list : passive_list, activity)
++      end
++
++      in_space = on || @config.screen.bounce
++      if in_space && !activity.shape_in_space
++        @space.add_shape(activity.shape)
++        activity.shape_in_space = true
++      elsif !in_space && activity.shape_in_space
++        @space.remove_shape(activity.shape)
++        activity.shape_in_space = false
++      end
++      activity.shape.group = on ? 0 : 1 # same non-zero group = no contacts
++      activity.collider = on
++
++      list_add(on ? colliding_list : passive_list, activity)
++    end
++
++    def list_add(list, activity)
++      activity.blob_index = list.size
++      list << activity
++    end
++
++    # O(1): move the last element into the removed one's slot.
++    def list_remove(list, activity)
++      i = activity.blob_index
++      last = list.pop
++      if last && !last.equal?(activity)
++        list[i] = last
++        last.blob_index = i
++      end
++      activity.blob_index = nil
++    end
++
++    def frame_budget?
++      @config.screen.frame_budget.to_f > 0
++    end
++
++    def target_frame_ms
++      fps = @config.screen.wanted_fps.to_f
++      1000.0 / (fps > 0 ? fps : 60.0)
++    end
++
++    # Time left for physics this frame: frame_budget % of the frame, minus
++    # what drawing and log parsing have been taking.
++    def physics_budget_ms
++      [target_frame_ms * @config.screen.frame_budget.to_f / 100.0 - @other_ms.to_f, 1.0].max
++    end
++
++    # After each physics step: scale the number of colliding blobs so the
++    # next step fits the budget. Shrinks quickly, grows slowly, and only
++    # grows when the limit is actually what's holding blobs back.
++    def adapt_collisions(physics_ms)
++      @collide_limit ||= 1000.0
++      # Aim the average at 70% of the budget: the cost of a step varies from
++      # frame to frame, and the headroom keeps the slower ones within budget.
++      ratio = physics_budget_ms * BUDGET_TARGET / [physics_ms, 0.05].max
++      ratio = [[ratio, 0.7].max, 1.05].min
++      return if ratio > 1.0 && colliders < @collide_limit * 0.9
++
++      @collide_limit = [[@collide_limit * ratio, MIN_COLLIDERS].max, 100_000].min
++
++      # Over the new limit: demote random colliders now, at most 20% per frame.
++      excess = colliders - collider_limit.to_i
++      [excess, (colliders * 0.2).ceil].min.times do
++        set_collider(colliding_list[rand(colliding_list.size)], false)
++      end if excess > 0
++    end
++
++    # Swap a few random colliding blobs with random passive ones, so every
++    # blob gets its turn at colliding.
++    def rotate_colliders
++      return if passive_list.empty? || colliding_list.empty?
++      n = [(colliders * ROTATE_FRACTION).ceil, passive_list.size].min
++      n.times do
++        incoming = passive_list[rand(passive_list.size)]
++        outgoing = colliding_list[rand(colliding_list.size)]
++        set_collider(outgoing, false)
++        set_collider(incoming, true)
++      end
++    end
++
++    # Fill free collider slots from passive blobs (e.g. after the limit grew).
++    def fill_colliders
++      return unless @config.screen.blob_collisions?
++      free = collider_limit ? collider_limit - colliders : passive_list.size
++      [free, passive_list.size, (MIN_COLLIDERS * 2)].min.times do
++        set_collider(passive_list[rand(passive_list.size)], true)
++      end if free > 0
+     end
+ 
+     def stats
+@@ -196,10 +328,15 @@ module GlTail
+         printf("%d frames in %6.3f seconds = %6.3f FPS\n",
+         @frames, seconds, $FPS) if $VRB > 0
+         @t0, @frames = t, 0
+-        puts "Elements[#{stats[0]}], Activities[#{stats[1]}], Colliding[#{colliders}], Blobs[#{BlobStore.used}/#{BlobStore.size}]" if $VRB > 0
++        puts "Elements[#{stats[0]}], Activities[#{stats[1]}], Colliding[#{colliders}#{frame_budget? ? " limit #{collider_limit}, physics #{'%.1f' % physics_budget_ms} ms budget" : ''}], Blobs[#{BlobStore.used}/#{BlobStore.size}]" if $VRB > 0
+       end
+ 
+       @render_time = (Time.new - @t)
++
++      # Non-physics work this frame, smoothed, for the physics budget.
++      other = @render_time * 1000.0 - @physics_ms.to_f + @process_ms.to_f
++      @other_ms = @other_ms ? @other_ms * 0.9 + other * 0.1 : other
++      @physics_ms = 0.0
+     end
+ 
+     def idle
+@@ -222,7 +359,9 @@ module GlTail
+       #    t = glutGet(GLUT_ELAPSED_TIME)
+       glutPostRedisplay()
+       glutSwapBuffers()
++      t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+       do_process
++      @process_ms = (Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0) * 1000.0
+       #    t = glutGet(GLUT_ELAPSED_TIME) - t
+       #    t = 14 if t > 14
+     end
+diff --git a/lib/gl_tail/sources/stdin.rb b/lib/gl_tail/sources/stdin.rb
+index 2a53135..d63443c 100644
+--- a/lib/gl_tail/sources/stdin.rb
++++ b/lib/gl_tail/sources/stdin.rb
+@@ -13,12 +13,17 @@ module GlTail
+       config_attribute :source, 'The type of Source'
+       config_attribute :host, 'Host name of the logged site (used to ignore self-referrals)'
+ 
+-      # Upper bound per frame, so a burst of backlog can't stall rendering.
+-      MAX_BYTES_PER_FRAME = 256 * 1024
++      # Time per frame for parsing log lines, so a burst can't stall a frame;
++      # lines left over wait in the buffer for the next frame.
++      PARSE_BUDGET = 0.004 # seconds
++      # Stop reading from the pipe while this much is still waiting (the
++      # sender then waits too, instead of glTail buffering without limit).
++      MAX_BACKLOG  = 4 * 1024 * 1024
+ 
+       def init
+         @io = $stdin
+-        @buffer = String.new
++        @buffer = String.new(encoding: Encoding::BINARY)
++        @pos = 0
+         @eof = false
+ 
+         if @io.tty?
+@@ -28,29 +33,33 @@ module GlTail
+       end
+ 
+       def process
+-        return if @eof
++        return if @eof && @buffer.empty?
+ 
+-        read = 0
+-        while read < MAX_BYTES_PER_FRAME
+-          chunk = @io.read_nonblock(65536, exception: false)
++        deadline = now + PARSE_BUDGET
++        loop do
++          # Parse complete lines already buffered; keep a trailing partial
++          # line until the rest of it arrives.
++          while (i = @buffer.byteindex("\n", @pos))
++            parse_line(@buffer.byteslice(@pos, i + 1 - @pos))
++            @pos = i + 1
++            return compact_buffer if now >= deadline
++          end
++          compact_buffer
+ 
++          break if @eof || @buffer.bytesize >= MAX_BACKLOG
++
++          chunk = @io.read_nonblock(65536, exception: false)
+           case chunk
+           when :wait_readable
+             break
+           when nil
+             @eof = true
+             parse_line(@buffer) unless @buffer.empty?
+-            @buffer = String.new
++            @buffer = String.new(encoding: Encoding::BINARY)
+             puts 'stdin closed; no more log lines will arrive.' if $VRB > 0
+             break
+           else
+-            read += chunk.bytesize
+             @buffer << chunk
+-            # Only hand complete lines to the parser; keep a trailing partial
+-            # line in the buffer until the rest of it arrives.
+-            while (i = @buffer.index("\n"))
+-              parse_line(@buffer.slice!(0, i + 1))
+-            end
+           end
+         end
+       rescue IOError, Errno::EBADF
+@@ -62,8 +71,18 @@ module GlTail
+ 
+       private
+ 
++      def now
++        Process.clock_gettime(Process::CLOCK_MONOTONIC)
++      end
++
++      def compact_buffer
++        return if @pos == 0
++        @buffer = @buffer.byteslice(@pos, @buffer.bytesize - @pos)
++        @pos = 0
++      end
++
+       def parse_line(raw)
+-        line = raw.chomp.force_encoding(Encoding::UTF_8).scrub
++        line = raw.dup.force_encoding(Encoding::UTF_8).chomp.scrub
+         return if line.empty?
+ 
+         puts "stdin: #{line}" if $DBG > 0
+diff --git a/vendor/chipmunk/ext/chipmunk/cpSpace.c b/vendor/chipmunk/ext/chipmunk/cpSpace.c
+index 8dc3b60..da96d30 100644
+--- a/vendor/chipmunk/ext/chipmunk/cpSpace.c
++++ b/vendor/chipmunk/ext/chipmunk/cpSpace.c
+@@ -20,6 +20,7 @@
+  */
+  
+ #include <stdlib.h>
++#include <stdint.h>
+ //#include <stdio.h>
+ #include <string.h>
+ #include <math.h>
+@@ -134,6 +135,7 @@ cpSpaceInit(cpSpace *space)
+ 	
+ 	space->arbiters = cpArrayNew(0);
+ 	space->pooledArbiters = cpArrayNew(0);
++	space->removedShapes = cpArrayNew(0);
+ 	
+ 	space->contactBuffersHead = NULL;
+ 	space->contactSet = cpHashSetNew(0, (cpHashSetEqlFunc)contactSetEql, (cpHashSetTransFunc)contactSetTrans);
+@@ -173,6 +175,7 @@ cpSpaceDestroy(cpSpace *space)
+ 	
+ 	cpArrayFree(space->arbiters);
+ 	cpArrayFree(space->pooledArbiters);
++	cpArrayFree(space->removedShapes);
+ 	
+ 	if(space->allocatedBuffers){
+ 		cpArrayEach(space->allocatedBuffers, freeWrap, NULL);
+@@ -399,11 +402,53 @@ cpSpaceRemoveShape(cpSpace *space, cpShape *shape)
+ 	
+ 	cpBodyRemoveShape(body, shape);
+ 	
+-	removalContext context = {space, shape};
+-	cpHashSetFilter(space->contactSet, (cpHashSetFilterFunc)contactSetFilterRemovedShape, &context);
++	// glTail: defer dropping this shape's contacts (see cpSpaceFlushRemovedShapes).
++	cpArrayPush(space->removedShapes, shape);
+ 	cpSpaceHashRemove(space->activeShapes, shape, shape->hashid);
+ }
+ 
++static int
++comparePointers(const void *a, const void *b)
++{
++	uintptr_t x = (uintptr_t)*(void * const *)a, y = (uintptr_t)*(void * const *)b;
++	return (x > y) - (x < y);
++}
++
++static cpBool
++isRemovedShape(cpArray *sorted, cpShape *shape)
++{
++	return bsearch(&shape, sorted->arr, sorted->num, sizeof(void *), comparePointers) != NULL;
++}
++
++static cpBool
++contactSetFilterRemovedShapes(cpArbiter *arb, cpSpace *space)
++{
++	// Pointer comparisons only: a removed shape may already have been freed.
++	if(isRemovedShape(space->removedShapes, arb->a) || isRemovedShape(space->removedShapes, arb->b)){
++		if(arb->state != cpArbiterStateCached){
++			arb->handler->separate(arb, space, arb->handler->data);
++		}
++		
++		cpArrayPush(space->pooledArbiters, arb);
++		return cpFalse;
++	}
++	
++	return cpTrue;
++}
++
++// glTail: drop the contacts of all shapes removed since the last step, in a
++// single pass over contactSet. Called at the very start of cpSpaceStep.
++void
++cpSpaceFlushRemovedShapes(cpSpace *space)
++{
++	cpArray *removed = space->removedShapes;
++	if(removed->num == 0) return;
++	
++	qsort(removed->arr, removed->num, sizeof(void *), comparePointers);
++	cpHashSetFilter(space->contactSet, (cpHashSetFilterFunc)contactSetFilterRemovedShapes, space);
++	removed->num = 0;
++}
++
+ void
+ cpSpaceRemoveStaticShape(cpSpace *space, cpShape *shape)
+ {
+diff --git a/vendor/chipmunk/ext/chipmunk/cpSpace.h b/vendor/chipmunk/ext/chipmunk/cpSpace.h
+index 2f6832a..6037faa 100644
+--- a/vendor/chipmunk/ext/chipmunk/cpSpace.h
++++ b/vendor/chipmunk/ext/chipmunk/cpSpace.h
+@@ -95,6 +95,11 @@ typedef struct cpSpace{
+ 	// List of active arbiters for the impulse solver.
+ 	CP_PRIVATE(cpArray *arbiters);
+ 	CP_PRIVATE(cpArray *pooledArbiters);
++
++	// glTail: shapes removed since the last step whose contacts still have to
++	// be dropped from contactSet. Done in one pass at the start of the next
++	// step instead of one full contactSet pass per removed shape.
++	CP_PRIVATE(cpArray *removedShapes);
+ 	
+ 	// Linked list ring of contact buffers.
+ 	// Head is the newest buffer, and each buffer points to a newer buffer.
+@@ -159,6 +164,7 @@ cpBody *cpSpaceAddBody(cpSpace *space, cpBody *body);
+ cpConstraint *cpSpaceAddConstraint(cpSpace *space, cpConstraint *constraint);
+ 
+ void cpSpaceRemoveShape(cpSpace *space, cpShape *shape);
++void cpSpaceFlushRemovedShapes(cpSpace *space);
+ void cpSpaceRemoveStaticShape(cpSpace *space, cpShape *shape);
+ void cpSpaceRemoveBody(cpSpace *space, cpBody *body);
+ void cpSpaceRemoveConstraint(cpSpace *space, cpConstraint *constraint);
+diff --git a/vendor/chipmunk/ext/chipmunk/cpSpaceStep.c b/vendor/chipmunk/ext/chipmunk/cpSpaceStep.c
+index 7dd2f76..f2e9932 100644
+--- a/vendor/chipmunk/ext/chipmunk/cpSpaceStep.c
++++ b/vendor/chipmunk/ext/chipmunk/cpSpaceStep.c
+@@ -290,6 +290,9 @@ cpSpaceStep(cpSpace *space, cpFloat dt)
+ 	if(!dt) return; // don't step if the timestep is 0!
+ 	cpFloat dt_inv = 1.0f/dt;
+ 
++	// glTail: first drop contacts of shapes removed since the last step.
++	cpSpaceFlushRemovedShapes(space);
++
+ 	cpArray *bodies = space->bodies;
+ 	cpArray *constraints = space->constraints;
+ 	
+diff --git a/vendor/chipmunk/ext/chipmunk/rb_cpSpace.c b/vendor/chipmunk/ext/chipmunk/rb_cpSpace.c
+index bdd3990..cf20b57 100644
+--- a/vendor/chipmunk/ext/chipmunk/rb_cpSpace.c
++++ b/vendor/chipmunk/ext/chipmunk/rb_cpSpace.c
+@@ -48,8 +48,10 @@ rb_cpSpaceInitialize(VALUE self) {
+ 
+   // These might as well be in one shared hash.
+   rb_iv_set(self, "static_shapes", rb_ary_new());
+-  rb_iv_set(self, "active_shapes", rb_ary_new());
+-  rb_iv_set(self, "bodies", rb_ary_new());
++  // glTail: identity hashes, so removing one of thousands of shapes or
++  // bodies doesn't scan (and call == on) every entry like rb_ary_delete.
++  rb_iv_set(self, "active_shapes", rb_funcall(rb_hash_new(), rb_intern("compare_by_identity"), 0));
++  rb_iv_set(self, "bodies", rb_funcall(rb_hash_new(), rb_intern("compare_by_identity"), 0));
+   rb_iv_set(self, "constraints", rb_ary_new());
+   rb_iv_set(self, "blocks", rb_hash_new());
+ 
+@@ -323,7 +325,7 @@ rb_cpSpaceAddPostStepCallback(int argc, VALUE *argv, VALUE self) {
+ static VALUE
+ rb_cpSpaceAddShape(VALUE self, VALUE shape) {
+   cpSpaceAddShape(SPACE(self), SHAPE(shape));
+-  rb_ary_push(rb_iv_get(self, "active_shapes"), shape);
++  rb_hash_aset(rb_iv_get(self, "active_shapes"), shape, Qtrue);
+   return shape;
+ }
+ 
+@@ -337,7 +339,7 @@ rb_cpSpaceAddStaticShape(VALUE self, VALUE shape) {
+ static VALUE
+ rb_cpSpaceAddBody(VALUE self, VALUE body) {
+   cpSpaceAddBody(SPACE(self), BODY(body));
+-  rb_ary_push(rb_iv_get(self, "bodies"), body);
++  rb_hash_aset(rb_iv_get(self, "bodies"), body, Qtrue);
+   return body;
+ }
+ 
+@@ -350,7 +352,7 @@ rb_cpSpaceAddConstraint(VALUE self, VALUE constraint) {
+ 
+ static VALUE
+ rb_cpSpaceRemoveShape(VALUE self, VALUE shape) {
+-  VALUE ok = rb_ary_delete(rb_iv_get(self, "active_shapes"), shape);
++  VALUE ok = rb_hash_delete(rb_iv_get(self, "active_shapes"), shape);
+   if(!(NIL_P(ok))) cpSpaceRemoveShape(SPACE(self), SHAPE(shape));
+   return ok;
+ }
+@@ -364,7 +366,7 @@ rb_cpSpaceRemoveStaticShape(VALUE self, VALUE shape) {
+ 
+ static VALUE
+ rb_cpSpaceRemoveBody(VALUE self, VALUE body) {
+-  VALUE ok = rb_ary_delete(rb_iv_get(self, "bodies"), body);
++  VALUE ok = rb_hash_delete(rb_iv_get(self, "bodies"), body);
+   if(!(NIL_P(ok))) cpSpaceRemoveBody(SPACE(self), BODY(body));
+   return ok;
+ }
+-- 
+2.43.0
+

@@ -1,0 +1,108 @@
+From 2fa57eaf7a7d4ebd565ff34fa517d3991fe6ce3b Mon Sep 17 00:00:00 2001
+From: gogo <gogo@bluedynamics.com>
+Date: Sun, 11 Oct 2026 22:59:49 +0200
+Subject: [PATCH 15/15] Fix blob collisions in budget mode
+
+Colliding blobs were set to shape group 0 to mean "no group", but the
+chipmunk Ruby wrapper stores rb_obj_id(value) as the group, which is
+never 0. All colliding blobs ended up in one group, and shapes in the
+same group never collide, so nothing collided at all.
+
+- rb_cpShape: group = nil now means CP_NO_GROUP.
+- Engine: colliding blobs get group nil; the collider limit starts at
+  1000 instead of 0 before the first physics step.
+
+Checked through Engine#add_blob/#set_collider with two blobs head-on:
+colliding pairs bounce (also after being rotated out and back in),
+pairs with a passive blob pass through. With real collisions, at 1500
+blobs/s: everything colliding ~34 ms physics/frame; budget mode 5-7 ms
+with 850-1500 colliding and 35-40% of blobs bouncing back.
+
+Requires bin/setup to rebuild the vendored chipmunk.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013kYwHzrj5ef427USqzf3UF
+---
+ CLAUDE.md                                 | 2 +-
+ README                                    | 3 ++-
+ lib/gl_tail/engine.rb                     | 7 +++++--
+ vendor/chipmunk/ext/chipmunk/rb_cpShape.c | 5 +++--
+ 4 files changed, 11 insertions(+), 6 deletions(-)
+
+diff --git a/CLAUDE.md b/CLAUDE.md
+index c2b033d..6741783 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -22,7 +22,7 @@ There is no real test suite — `test/test_gl_tail.rb` is empty.
+ 
+ Runtime keys while the visualizer is running: `f` toggles target FPS, `b` cycles default blob type, `space` toggles bouncing, `c` toggles blob-to-blob collisions, `shift+f` toggles fullscreen.
+ 
+-Frame budget (`frame_budget: P`, set to 90 by `--fast`): every physics blob is in `Engine#colliding_list` or `#passive_list` (swap-remove, index on `Activity#blob_index`); passive shapes are out of the space (or group 1 with bouncing on). Before each step 5% of colliders swap with random passive blobs; after it `adapt_collisions` scales the collider limit so physics (rotation + step) averages 70% of `max(P% × frame − other work, 40% × frame)` (the floor matters: on macOS the measured draw time can fill the whole frame, which starved physics down to 50 colliders) (draw minus physics, plus `do_process`, smoothed). Elements create body+shape and call `Engine#add_blob`/`#remove_blob` only. Vendored chipmunk is patched so removing shapes doesn't scan contactSet per shape (`cpSpaceFlushRemovedShapes`, one pass at the start of `cpSpaceStep`; pointer compares only, removed shapes may already be freed) and the Ruby keep-alive lists for bodies/active shapes are identity hashes. `Source::Stdin` parses for at most 4 ms per call and stops reading at a 4 MB backlog.
++Frame budget (`frame_budget: P`, set to 90 by `--fast`): every physics blob is in `Engine#colliding_list` or `#passive_list` (swap-remove, index on `Activity#blob_index`); passive shapes are out of the space (or group 1 with bouncing on). Before each step 5% of colliders swap with random passive blobs; after it `adapt_collisions` scales the collider limit so physics (rotation + step) averages 70% of `max(P% × frame − other work, 40% × frame)` (the floor matters: on macOS the measured draw time can fill the whole frame, which starved physics down to 50 colliders) (draw minus physics, plus `do_process`, smoothed). Elements create body+shape and call `Engine#add_blob`/`#remove_blob` only. Shape groups: the Ruby wrapper stores `rb_obj_id(value)` as the group, so `group = 0` is a non-zero group; use `group = nil` (patched to mean CP_NO_GROUP) for "no group". Vendored chipmunk is also patched so removing shapes doesn't scan contactSet per shape (`cpSpaceFlushRemovedShapes`, one pass at the start of `cpSpaceStep`; pointer compares only, removed shapes may already be freed) and the Ruby keep-alive lists for bodies/active shapes are identity hashes. `Source::Stdin` parses for at most 4 ms per call and stops reading at a 4 MB backlog.
+ 
+ Performance knobs (`config:` section): `physics_rate: N|auto` steps chipmunk every Nth frame with dt N/60 (simulated time per drawn frame is unchanged) and `Activity#render` extrapolates body positions by `Engine#physics_lag`; `auto` (also `--fast`) adapts N in 1..3 against a ~4 ms/frame physics budget. Measured steady state: every 2nd frame ≈ half the physics cost, path deviation ≤ ~2 px. `blob_collisions: false` puts blobs in one chipmunk group (no blob/blob contacts) and, while bouncing is off, skips the collision shape entirely — measured ~34 ms → ~0.1 ms physics per frame at 4000 blobs. `max_blobs: N` caps blobs in flight, using the previous frame's drawn-activity count (`Engine#blob_budget_left?`), so it can't drift; capped requests are still counted. `SIGUSR2` toggles debug level.
+ 
+diff --git a/README b/README
+index 4951910..0db149c 100644
+--- a/README
++++ b/README
+@@ -92,7 +92,7 @@ Installation instructions (Windows):
+ 
+ Applying the patches to the original glTail:
+   Starting from a fresh clone of https://github.com/Fudge/gltail, with the
+-  fourteen .patch files in a folder next to it called gltail-patches:
++  fifteen .patch files in a folder next to it called gltail-patches:
+ 
+     git clone https://github.com/Fudge/gltail.git
+     cd gltail
+@@ -110,4 +110,5 @@ Applying the patches to the original glTail:
+     git am ../gltail-patches/0012-Cap-the-number-of-blobs-that-collide-with-each-other.patch
+     git am ../gltail-patches/0013-Keep-frames-within-a-time-budget-under-heavy-traffic.patch
+     git am ../gltail-patches/0014-Give-physics-at-least-40-of-each-frame-in-budget-mod.patch
++    git am ../gltail-patches/0015-Fix-blob-collisions-in-budget-mode.patch
+     bin/setup
+diff --git a/lib/gl_tail/engine.rb b/lib/gl_tail/engine.rb
+index 664fe6e..ac52baa 100644
+--- a/lib/gl_tail/engine.rb
++++ b/lib/gl_tail/engine.rb
+@@ -135,7 +135,7 @@ module GlTail
+       limits = []
+       max = @config.screen.max_colliding_blobs.to_i
+       limits << max if max > 0
+-      limits << @collide_limit.to_i if frame_budget?
++      limits << (@collide_limit ||= 1000.0).to_i if frame_budget?
+       limits.min
+     end
+ 
+@@ -174,7 +174,10 @@ module GlTail
+         @space.remove_shape(activity.shape)
+         activity.shape_in_space = false
+       end
+-      activity.shape.group = on ? 0 : 1 # same non-zero group = no contacts
++      # Passive blobs share a group (same group = no contacts between them);
++      # colliding ones have none. nil is "no group" - the Ruby wrapper turns
++      # any other value, 0 included, into a non-zero group via its object_id.
++      activity.shape.group = on ? nil : 1
+       activity.collider = on
+ 
+       list_add(on ? colliding_list : passive_list, activity)
+diff --git a/vendor/chipmunk/ext/chipmunk/rb_cpShape.c b/vendor/chipmunk/ext/chipmunk/rb_cpShape.c
+index a8db5cc..ae7885a 100644
+--- a/vendor/chipmunk/ext/chipmunk/rb_cpShape.c
++++ b/vendor/chipmunk/ext/chipmunk/rb_cpShape.c
+@@ -106,9 +106,10 @@ rb_cpShapeGetGroup(VALUE self) {
+ 
+ static VALUE
+ rb_cpShapeSetGroup(VALUE self, VALUE val) {
+-  VALUE col_type = rb_obj_id(val);
+   rb_iv_set(self, "group", val);
+-  SHAPE(self)->group = NUM2UINT(col_type);
++  // glTail: nil means "no group" (CP_NO_GROUP). Any other object is
++  // identified by its object_id, which is never 0, not even for 0 itself.
++  SHAPE(self)->group = NIL_P(val) ? CP_NO_GROUP : NUM2UINT(rb_obj_id(val));
+ 
+   return val;
+ }
+-- 
+2.43.0
+

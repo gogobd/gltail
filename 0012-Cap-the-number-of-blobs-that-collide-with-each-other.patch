@@ -1,0 +1,216 @@
+From d794a2051796a6e968a2ab000b7aa640fcc54482 Mon Sep 17 00:00:00 2001
+From: gogo <gogo@bluedynamics.com>
+Date: Sun, 11 Oct 2026 14:43:47 +0200
+Subject: [PATCH 12/12] Cap the number of blobs that collide with each other
+
+Under a request flood, thousands of blobs collide head-on in the middle,
+slow each other down and pile up; the bigger the pile, the slower each
+frame, and since the physics advances per frame, the slower it drains.
+
+max_colliding_blobs: N lets only N blobs in flight collide with other
+blobs. Every blob is still drawn and falls normally; the rest pass
+through other blobs (and still hit the walls with bouncing on). The
+cost is in finding nearby pairs for every shape, so layer-based
+filtering didn't help; leaving overflow blobs out does. Simulated at
+1500 blobs/s: ~20 ms -> ~2 ms physics per frame with a cap of 1500.
+
+--fast now sets max_colliding_blobs: 1500 (unless configured), and the
+10-second stats line shows Colliding[n].
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013kYwHzrj5ef427USqzf3UF
+---
+ README                  |  9 ++++++++-
+ bin/gl_tail             |  4 +++-
+ dist/config.yaml        |  1 +
+ lib/gl_tail/activity.rb |  2 +-
+ lib/gl_tail/config.rb   |  2 ++
+ lib/gl_tail/element.rb  | 17 +++++++++--------
+ lib/gl_tail/engine.rb   | 24 +++++++++++++++++++++++-
+ 7 files changed, 47 insertions(+), 12 deletions(-)
+
+diff --git a/README b/README
+index 514cd1a..27ed5ac 100644
+--- a/README
++++ b/README
+@@ -42,6 +42,12 @@ Performance:
+   roughly halves the physics cost; bounces are a few pixels less exact.
+   physics_rate: 2 or 3 forces a fixed rate.
+ 
++  --fast also lets at most 1500 blobs collide with each other at a time
++  (max_colliding_blobs: N in the config). Every blob is still drawn and
++  falls normally; blobs beyond the limit pass through the others. Without a
++  limit, a flood of requests can pile up thousands of colliding blobs in the
++  middle of the screen, and the more pile up, the slower they drain.
++
+   If that's not enough: blob_collisions: false stops blobs colliding with
+   each other (near-zero physics cost; 'c' toggles it while running), and
+   max_blobs: N caps the blobs in flight (requests over the cap are still
+@@ -89,7 +95,7 @@ Installation instructions (Windows):
+ 
+ Applying the patches to the original glTail:
+   Starting from a fresh clone of https://github.com/Fudge/gltail, with the
+-  eleven .patch files in a folder next to it called gltail-patches:
++  twelve .patch files in a folder next to it called gltail-patches:
+ 
+     git clone https://github.com/Fudge/gltail.git
+     cd gltail
+@@ -104,4 +110,5 @@ Applying the patches to the original glTail:
+     git am ../gltail-patches/0009-Add-per-second-rate_unit-second-to-show-rates-as-r-s.patch
+     git am ../gltail-patches/0010-Report-unknown-command-line-options-instead-of-treat.patch
+     git am ../gltail-patches/0011-README-explain-how-to-apply-.patch-files-with-git-am.patch
++    git am ../gltail-patches/0012-Cap-the-number-of-blobs-that-collide-with-each-other.patch
+     bin/setup
+diff --git a/bin/gl_tail b/bin/gl_tail
+index 018e36e..53d63e1 100755
+--- a/bin/gl_tail
++++ b/bin/gl_tail
+@@ -44,7 +44,8 @@ ARGV.each do |arg|
+          '[--name|-N NAME]   Site name shown for --stdin (default: stdin)',
+          '[--per-second]     Show rates as requests per second (r/s) instead of r/m',
+          '[--fast]           Under heavy load, run physics every 2nd/3rd frame',
+-         '                   instead of every frame (physics_rate: auto)',
++         '                   (physics_rate: auto) and let at most 1500 blobs',
++         '                   collide with each other (max_colliding_blobs: 1500)',
+          '[configfile]       The YAML config file you wish to load (default = gl_tail.yaml;',
+          '                   optional with --stdin, which then uses the built-in defaults)',
+          '',
+@@ -166,6 +167,7 @@ config = GlTail::Config.parse_yaml(file, overrides)
+ 
+ if defined? @fast
+   config.screen.physics_rate = 'auto'
++  config.screen.max_colliding_blobs = 1500 if config.screen.max_colliding_blobs.to_i <= 0
+ end
+ 
+ if defined? @per_second
+diff --git a/dist/config.yaml b/dist/config.yaml
+index d76a07a..c590cae 100644
+--- a/dist/config.yaml
++++ b/dist/config.yaml
+@@ -33,6 +33,7 @@ config:
+     # Performance under heavy traffic:
+     # physics_rate: auto       # 1 = physics every frame; 2/3 = every 2nd/3rd frame;
+     #                          # auto = only when busy (same as --fast)
++    # max_colliding_blobs: 1500 # only this many blobs collide; the rest pass through (0 = all)
+     # blob_collisions: false   # blobs don't collide with each other; much cheaper
+     # max_blobs: 2000          # cap on blobs in flight; 0 = unlimited
+     left_column:
+diff --git a/lib/gl_tail/activity.rb b/lib/gl_tail/activity.rb
+index 04b0f13..4abb7dd 100644
+--- a/lib/gl_tail/activity.rb
++++ b/lib/gl_tail/activity.rb
+@@ -6,7 +6,7 @@
+ 
+ class Activity
+   attr_accessor :x, :y, :z, :wx, :wy, :wz, :xi, :yi, :zi
+-  attr_accessor :message, :color, :size, :type, :body, :shape, :gl_list
++  attr_accessor :message, :color, :size, :type, :body, :shape, :gl_list, :collider
+ 
+   def initialize(message, x, y, z, color, size, type = 0)
+     @shape = @body = nil
+diff --git a/lib/gl_tail/config.rb b/lib/gl_tail/config.rb
+index 5f9355d..fb9ecda 100644
+--- a/lib/gl_tail/config.rb
++++ b/lib/gl_tail/config.rb
+@@ -180,6 +180,8 @@ module GlTail
+       %w[second seconds s sec].include?(rate_unit.to_s.downcase)
+     end
+ 
++    config_attribute :max_colliding_blobs, 'Maximum number of blobs that collide with each other (default 0 = all). Blobs beyond it are still drawn and fall normally but pass through other blobs.'
++
+     def blob_collisions?
+       !(blob_collisions == false || blob_collisions.to_s.downcase == 'false')
+     end
+diff --git a/lib/gl_tail/element.rb b/lib/gl_tail/element.rb
+index 3bc79eb..6333422 100644
+--- a/lib/gl_tail/element.rb
++++ b/lib/gl_tail/element.rb
+@@ -113,8 +113,7 @@ class Element
+     for a in @activities do 
+       if a.x > 1.0 || a.x < -1.0 || a.y < cutoff
+         if a.body 
+-          engine.space.remove_body(a.body)
+-          engine.space.remove_shape(a.shape) if a.shape
++          engine.remove_blob(a)
+           a.free_vertex_lists
+         end 
+         @delete <<  a
+@@ -343,16 +342,19 @@ class Element
+           end 
+           engine.space.add_body(a.body)
+ 
+-          # Collision shapes are what make physics expensive. Without
+-          # blob-to-blob collisions, a blob only needs a shape to bounce off
+-          # the walls; otherwise it's a plain body that just falls.
+-          collide = engine.screen.blob_collisions?
++          # Collision shapes are what make physics expensive: every shape in
++          # the space is checked against its neighbours each step. Only blobs
++          # with a free collision slot (max_colliding_blobs) collide with
++          # other blobs. The rest are drawn and fall just the same, passing
++          # through other blobs; with bouncing on they still hit the walls.
++          collide = engine.screen.blob_collisions? && engine.collider_available?
+           if collide || engine.screen.bounce
+             a.shape = CP::Shape::Circle.new(a.body, bs, CP::Vec2.new(0.0, 0.0))
+             a.shape.e = 0.1 # Elasticity
+             a.shape.u = 1   # Friction
+             a.shape.group = 1 unless collide # same group = no blob/blob contacts
+             engine.space.add_shape(a.shape)
++            engine.collider_added(a) if collide
+           end
+         end
+       end 
+@@ -362,8 +364,7 @@ class Element
+     for a in @activities do
+       if a.body
+         if a.x > 1.0 || a.x < -1.0 || a.y < -(engine.screen.aspect*1.5)
+-          engine.space.remove_body(a.body)
+-          engine.space.remove_shape(a.shape) if a.shape
++          engine.remove_blob(a)
+           @delete << a
+           a.free_vertex_lists
+         else 
+diff --git a/lib/gl_tail/engine.rb b/lib/gl_tail/engine.rb
+index 2dbbe04..5a3fce7 100644
+--- a/lib/gl_tail/engine.rb
++++ b/lib/gl_tail/engine.rb
+@@ -98,6 +98,28 @@ module GlTail
+       @blobs_spawned += 1
+     end
+ 
++    # Blobs currently colliding with other blobs (screen.max_colliding_blobs).
++    def colliders
++      @colliders ||= 0
++    end
++
++    def collider_available?
++      max = @config.screen.max_colliding_blobs.to_i
++      max <= 0 || colliders < max
++    end
++
++    def collider_added(activity)
++      activity.collider = true
++      @colliders = colliders + 1
++    end
++
++    def remove_blob(activity)
++      @space.remove_body(activity.body)
++      return unless activity.shape
++      @space.remove_shape(activity.shape)
++      @colliders = colliders - 1 if activity.collider
++    end
++
+     def stats
+       @stats
+     end
+@@ -174,7 +196,7 @@ module GlTail
+         printf("%d frames in %6.3f seconds = %6.3f FPS\n",
+         @frames, seconds, $FPS) if $VRB > 0
+         @t0, @frames = t, 0
+-        puts "Elements[#{stats[0]}], Activities[#{stats[1]}], Blobs[#{BlobStore.used}/#{BlobStore.size}]" if $VRB > 0
++        puts "Elements[#{stats[0]}], Activities[#{stats[1]}], Colliding[#{colliders}], Blobs[#{BlobStore.used}/#{BlobStore.size}]" if $VRB > 0
+       end
+ 
+       @render_time = (Time.new - @t)
+-- 
+2.43.0
+
