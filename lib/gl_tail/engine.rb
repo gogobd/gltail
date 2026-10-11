@@ -135,7 +135,7 @@ module GlTail
       limits = []
       max = @config.screen.max_colliding_blobs.to_i
       limits << max if max > 0
-      limits << @collide_limit.to_i if frame_budget?
+      limits << (@collide_limit ||= 1000.0).to_i if frame_budget?
       limits.min
     end
 
@@ -174,7 +174,10 @@ module GlTail
         @space.remove_shape(activity.shape)
         activity.shape_in_space = false
       end
-      activity.shape.group = on ? 0 : 1 # same non-zero group = no contacts
+      # Passive blobs share a group (same group = no contacts between them);
+      # colliding ones have none. nil is "no group" - the Ruby wrapper turns
+      # any other value, 0 included, into a non-zero group via its object_id.
+      activity.shape.group = on ? nil : 1
       activity.collider = on
 
       list_add(on ? colliding_list : passive_list, activity)

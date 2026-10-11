@@ -92,7 +92,7 @@ Installation instructions (Windows):
 
 Applying the patches to the original glTail:
   Starting from a fresh clone of https://github.com/Fudge/gltail, with the
-  fourteen .patch files in a folder next to it called gltail-patches:
+  fifteen .patch files in a folder next to it called gltail-patches:
 
     git clone https://github.com/Fudge/gltail.git
     cd gltail
@@ -110,4 +110,5 @@ Applying the patches to the original glTail:
     git am ../gltail-patches/0012-Cap-the-number-of-blobs-that-collide-with-each-other.patch
     git am ../gltail-patches/0013-Keep-frames-within-a-time-budget-under-heavy-traffic.patch
     git am ../gltail-patches/0014-Give-physics-at-least-40-of-each-frame-in-budget-mod.patch
+    git am ../gltail-patches/0015-Fix-blob-collisions-in-budget-mode.patch
     bin/setup

@@ -106,9 +106,10 @@ rb_cpShapeGetGroup(VALUE self) {
 
 static VALUE
 rb_cpShapeSetGroup(VALUE self, VALUE val) {
-  VALUE col_type = rb_obj_id(val);
   rb_iv_set(self, "group", val);
-  SHAPE(self)->group = NUM2UINT(col_type);
+  // glTail: nil means "no group" (CP_NO_GROUP). Any other object is
+  // identified by its object_id, which is never 0, not even for 0 itself.
+  SHAPE(self)->group = NIL_P(val) ? CP_NO_GROUP : NUM2UINT(rb_obj_id(val));
 
   return val;
 }
